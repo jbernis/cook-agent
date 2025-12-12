@@ -14,6 +14,8 @@
     "authSuccessContinue": "Authorization successful! I'm now continuing with your request.",
     "productTopMatching": "Top Matching Products",
     "productNoneFound": "No products found",
+    "productSelectionMessage": "Here's **{{title}}** — click **Add to Cart** on the card to add it to your cart.",
+    "productSelectionOutOfRange": "I couldn't find that item in the list. Please pick 1, 2, or 3.",
     "addToCart": "Add to Cart",
     "addToCartPrompt": "Add {{title}} to my cart",
     "addingToCart": "Adding…",

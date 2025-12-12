@@ -60,6 +60,13 @@
    */
   const ShopAIChat = {
     /**
+     * Lightweight in-memory state for the widget.
+     */
+    state: {
+      lastProductResults: [],
+    },
+
+    /**
      * UI-related elements and functionality
      */
     UI: {
@@ -235,9 +242,12 @@
       /**
        * Display product results in the chat
        * @param {Array} products - Array of product data objects
+       * @param {Object} [options]
+       * @param {boolean} [options.storeAsLastResults=true] - Whether to store these as the last selectable results
        */
-      displayProductResults: function(products) {
+      displayProductResults: function(products, options) {
         const { messagesContainer } = this.elements;
+        const storeAsLastResults = !(options && options.storeAsLastResults === false);
 
         // Create a wrapper for the product section
         const productSection = document.createElement('div');
@@ -261,6 +271,11 @@
           noProductsMessage.style.padding = "10px";
           productsContainer.appendChild(noProductsMessage);
         } else {
+          if (storeAsLastResults) {
+            ShopAIChat.state.lastProductResults = products;
+            debugLog('Stored lastProductResults', { count: products.length });
+          }
+
           products.forEach(product => {
             const productCard = ShopAIChat.Product.createCard(product);
             productsContainer.appendChild(productCard);
@@ -294,6 +309,17 @@
         ShopAIChat.UI.showTypingIndicator();
 
         try {
+          // If the user picks "the 2nd one" from the last product results, render that product card locally.
+          const selectionIndex = ShopAIChat.Selection
+            ? ShopAIChat.Selection.parseSelectedIndex(userMessage, ShopAIChat.state.lastProductResults?.length || 0)
+            : null;
+
+          if (selectionIndex !== null && selectionIndex !== undefined) {
+            debugLog('Product selection detected', { userMessage, selectionIndex });
+            await ShopAIChat.Selection.handleSelection(selectionIndex, messagesContainer);
+            return;
+          }
+
           // If the user is asking about their cart, answer locally using Online Store cart (/cart.js)
           if (ShopAIChat.Cart && ShopAIChat.Cart.isCartQuery(userMessage)) {
             debugLog('Cart query detected; answering via /cart.js', { userMessage });
@@ -405,6 +431,126 @@
 
         messagesContainer.appendChild(toolUseElement);
         ShopAIChat.UI.scrollToBottom();
+      }
+    },
+
+    /**
+     * Selection helpers for "first/second/third..." messages based on the last displayed products.
+     */
+    Selection: {
+      /**
+       * Parse a user message like "the second one", "2", "deuxième", "2e", etc. into a 0-based index.
+       * Returns null when not a selection.
+       * @param {string} message
+       * @param {number} max
+       * @returns {number|null}
+       */
+      parseSelectedIndex: function(message, max) {
+        if (typeof message !== 'string') return null;
+        if (typeof max !== 'number' || max <= 0) return null;
+
+        const raw = message.trim();
+        if (!raw) return null;
+
+        const m = raw.toLowerCase();
+
+        // Numeric-only selections like "2"
+        if (/^\d+$/.test(m)) {
+          const n = Number(m);
+          if (n >= 1 && n <= max) return n - 1;
+          return null;
+        }
+
+        // "#2", "n° 2", "no 2", "numéro 2"
+        const numericMatch = m.match(/\b(?:#|n°|no|num(?:ero|éro)?|number)\s*(\d+)\b/);
+        if (numericMatch && numericMatch[1]) {
+          const n = Number(numericMatch[1]);
+          if (n >= 1 && n <= max) return n - 1;
+        }
+
+        // Ordinal words (EN/FR)
+        const wordToIndex = {
+          // English
+          first: 0,
+          '1st': 0,
+          second: 1,
+          '2nd': 1,
+          third: 2,
+          '3rd': 2,
+          fourth: 3,
+          '4th': 3,
+          fifth: 4,
+          '5th': 4,
+          // French
+          premier: 0,
+          premiere: 0,
+          '1er': 0,
+          '1ère': 0,
+          deuxieme: 1,
+          '2e': 1,
+          '2ème': 1,
+          '2eme': 1,
+          troisieme: 2,
+          '3e': 2,
+          '3ème': 2,
+          '3eme': 2,
+          quatrieme: 3,
+          '4e': 3,
+          '4ème': 3,
+          '4eme': 3,
+          cinquieme: 4,
+          '5e': 4,
+          '5ème': 4,
+          '5eme': 4,
+        };
+
+        // Normalize accents for matching simple keys (best-effort)
+        const normalized = m.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+        const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean);
+        for (const token of tokens) {
+          if (Object.prototype.hasOwnProperty.call(wordToIndex, token)) {
+            const idx = wordToIndex[token];
+            if (idx >= 0 && idx < max) return idx;
+            return null;
+          }
+        }
+
+        return null;
+      },
+
+      /**
+       * Render the selected product card and a short guidance message.
+       * @param {number} index
+       * @param {HTMLElement} messagesContainer
+       */
+      handleSelection: async function(index, messagesContainer) {
+        ShopAIChat.UI.removeTypingIndicator();
+
+        const products = Array.isArray(ShopAIChat.state.lastProductResults) ? ShopAIChat.state.lastProductResults : [];
+        const product = products[index];
+
+        if (!product) {
+          ShopAIChat.Message.add(
+            t('productSelectionOutOfRange', "I couldn't find that item in the list. Please pick 1, 2, or 3."),
+            'assistant',
+            messagesContainer
+          );
+          return;
+        }
+
+        // Show the selected product card (do not overwrite lastProductResults so user can pick again)
+        ShopAIChat.UI.displayProductResults([product], { storeAsLastResults: false });
+
+        const msgTemplate = t(
+          'productSelectionMessage',
+          "Here's **{{title}}** — click **Add to Cart** on the card to add it to your cart."
+        );
+        ShopAIChat.Message.add(
+          template(msgTemplate, { title: product.title }),
+          'assistant',
+          messagesContainer
+        );
       }
     },
 
