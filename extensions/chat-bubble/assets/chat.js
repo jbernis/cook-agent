@@ -72,6 +72,7 @@
     UI: {
       elements: {},
       isMobile: false,
+      _OPEN_STATE_KEY: 'shopAiChatIsOpen',
 
       /**
        * Initialize UI elements and event listeners
@@ -174,6 +175,7 @@
         chatWindow.classList.toggle('active');
 
         if (chatWindow.classList.contains('active')) {
+          try { sessionStorage.setItem(this._OPEN_STATE_KEY, '1'); } catch { /* ignore */ }
           // On mobile, prevent body scrolling and delay focus
           if (this.isMobile) {
             document.body.classList.add('shop-ai-chat-open');
@@ -184,9 +186,29 @@
           // Always scroll messages to bottom when opening
           this.scrollToBottom();
         } else {
+          try { sessionStorage.setItem(this._OPEN_STATE_KEY, '0'); } catch { /* ignore */ }
           // Remove body class when closing
           document.body.classList.remove('shop-ai-chat-open');
         }
+      },
+
+      /**
+       * Open chat window (idempotent)
+       */
+      openChatWindow: function() {
+        const { chatWindow, chatInput } = this.elements;
+        if (!chatWindow) return;
+        if (chatWindow.classList.contains('active')) return;
+        chatWindow.classList.add('active');
+        try { sessionStorage.setItem(this._OPEN_STATE_KEY, '1'); } catch { /* ignore */ }
+
+        if (this.isMobile) {
+          document.body.classList.add('shop-ai-chat-open');
+          setTimeout(() => chatInput?.focus?.(), 500);
+        } else {
+          chatInput?.focus?.();
+        }
+        this.scrollToBottom();
       },
 
       /**
@@ -196,6 +218,7 @@
         const { chatWindow, chatInput } = this.elements;
 
         chatWindow.classList.remove('active');
+        try { sessionStorage.setItem(this._OPEN_STATE_KEY, '0'); } catch { /* ignore */ }
 
         // On mobile, blur input to hide keyboard and enable body scrolling
         if (this.isMobile) {
@@ -1479,6 +1502,15 @@
         }
       } catch (e) {
         debugWarn('Unable to restore lastProductResults from sessionStorage', e);
+      }
+
+      // Restore chat open state across navigation
+      try {
+        if (sessionStorage.getItem(this.UI._OPEN_STATE_KEY) === '1') {
+          this.UI.openChatWindow();
+        }
+      } catch {
+        // ignore
       }
 
       // Check for existing conversation
