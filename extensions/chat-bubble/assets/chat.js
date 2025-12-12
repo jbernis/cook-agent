@@ -853,6 +853,55 @@
      */
     Product: {
       /**
+       * Extract a numeric variant id from various shapes:
+       * - "gid://shopify/ProductVariant/123"
+       * - "123"
+       * - 123
+       * @param {string|number|undefined|null} value
+       * @returns {number|null}
+       */
+      _toNumericVariantId: function(value) {
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+        if (typeof value !== 'string') return null;
+
+        const trimmed = value.trim();
+        if (/^\d+$/.test(trimmed)) return Number(trimmed);
+
+        const gidMatch = trimmed.match(/gid:\/\/shopify\/ProductVariant\/(\d+)/);
+        if (gidMatch && gidMatch[1]) return Number(gidMatch[1]);
+
+        return null;
+      },
+
+      /**
+       * Add a variant to the Online Store cart using Shopify Ajax Cart API.
+       * This uses the shopper's cart cookies automatically.
+       * @param {number} variantId
+       * @param {number} quantity
+       */
+      _addVariantToOnlineStoreCart: async function(variantId, quantity = 1) {
+        const response = await fetch('/cart/add.js', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({
+            items: [{ id: variantId, quantity }]
+          }),
+          credentials: 'same-origin',
+        });
+
+        if (!response.ok) {
+          let details = '';
+          try { details = await response.text(); } catch { /* ignore */ }
+          throw new Error(`Cart add failed: ${response.status}${details ? ` ${details}` : ''}`);
+        }
+
+        return await response.json();
+      },
+
+      /**
        * Create a product card element
        * @param {Object} product - Product data
        * @returns {HTMLElement} Product card element
@@ -908,20 +957,64 @@
         button.classList.add('shop-ai-add-to-cart');
         button.textContent = t('addToCart', 'Add to Cart');
         button.dataset.productId = product.id;
+        if (product.variant_id) {
+          button.dataset.variantId = product.variant_id;
+        }
 
         // Add click handler for the button
         button.addEventListener('click', function() {
-          // Send message to add this product to cart
-          const input = document.querySelector('.shop-ai-chat-input input');
-          if (input) {
-            const promptTemplate = t('addToCartPrompt', 'Add {{title}} to my cart');
-            input.value = template(promptTemplate, { title: product.title });
-            // Trigger a click on the send button
-            const sendButton = document.querySelector('.shop-ai-chat-send');
-            if (sendButton) {
-              sendButton.click();
+          // Prefer Online Store cart (Ajax API) so /cart reflects changes
+          const numericVariantId = ShopAIChat.Product._toNumericVariantId(product.variant_id);
+          const messagesContainer = ShopAIChat.UI?.elements?.messagesContainer;
+
+          if (!numericVariantId) {
+            // Fallback: keep previous behavior if we can't determine a variant id
+            const input = document.querySelector('.shop-ai-chat-input input');
+            if (input) {
+              const promptTemplate = t('addToCartPrompt', 'Add {{title}} to my cart');
+              input.value = template(promptTemplate, { title: product.title });
+              const sendButton = document.querySelector('.shop-ai-chat-send');
+              if (sendButton) sendButton.click();
             }
+            return;
           }
+
+          const previousText = button.textContent;
+          button.disabled = true;
+          button.textContent = t('addingToCart', 'Adding…');
+
+          ShopAIChat.Product._addVariantToOnlineStoreCart(numericVariantId, 1)
+            .then(() => {
+              button.textContent = t('addedToCart', 'Added');
+              if (messagesContainer) {
+                const msgTemplate = t(
+                  'addedToCartMessage',
+                  'Added **{{title}}** to your cart. You can [click here to view your cart](/cart).'
+                );
+                ShopAIChat.Message.add(
+                  template(msgTemplate, { title: product.title }),
+                  'assistant',
+                  messagesContainer
+                );
+              }
+              // Reset button label after a short delay
+              setTimeout(() => {
+                button.disabled = false;
+                button.textContent = previousText;
+              }, 1500);
+            })
+            .catch((error) => {
+              console.error('Error adding to Online Store cart:', error);
+              button.disabled = false;
+              button.textContent = previousText;
+              if (messagesContainer) {
+                ShopAIChat.Message.add(
+                  t('addToCartFailed', "Sorry, I couldn't add that to your cart. Please try again."),
+                  'assistant',
+                  messagesContainer
+                );
+              }
+            });
         });
 
         info.appendChild(button);

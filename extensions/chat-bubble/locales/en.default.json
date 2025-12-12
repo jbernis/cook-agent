@@ -16,6 +16,10 @@
     "productNoneFound": "No products found",
     "addToCart": "Add to Cart",
     "addToCartPrompt": "Add {{title}} to my cart",
+    "addingToCart": "Adding…",
+    "addedToCart": "Added",
+    "addedToCartMessage": "Added **{{title}}** to your cart. You can [click here to view your cart](/cart).",
+    "addToCartFailed": "Sorry, I couldn't add that to your cart. Please try again.",
     "schema": {
       "blockName": "AI Chat Assistant",
       "settings": {

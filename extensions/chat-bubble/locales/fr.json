@@ -16,6 +16,10 @@
     "productNoneFound": "Aucun produit trouvé",
     "addToCart": "Ajouter au panier",
     "addToCartPrompt": "Ajoute {{title}} à mon panier",
+    "addingToCart": "Ajout…",
+    "addedToCart": "Ajouté",
+    "addedToCartMessage": "**{{title}}** a été ajouté à votre panier. Vous pouvez [cliquer ici pour voir votre panier](/cart).",
+    "addToCartFailed": "Désolé, je n’ai pas pu ajouter cet article à votre panier. Veuillez réessayer.",
     "schema": {
       "blockName": "Assistant IA (chat)",
       "settings": {

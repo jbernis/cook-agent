@@ -100,13 +100,21 @@ export function createToolService() {
         ? `${product.variants[0].currency} ${product.variants[0].price}`
         : 'Price not available');
 
+    const firstVariant = (product.variants && product.variants.length > 0) ? product.variants[0] : null;
+    const variantId =
+      (firstVariant && typeof firstVariant.variant_id === 'string' ? firstVariant.variant_id : null) ||
+      (firstVariant && typeof firstVariant.id === 'string' ? firstVariant.id : null) ||
+      (firstVariant && typeof firstVariant.id === 'number' ? String(firstVariant.id) : null) ||
+      undefined;
+
     return {
       id: product.product_id || `product-${Math.random().toString(36).substring(7)}`,
       title: product.title || 'Product',
       price: price,
       image_url: product.image_url || '',
       description: product.description || '',
-      url: product.url || ''
+      url: product.url || '',
+      variant_id: variantId,
     };
   };
 
