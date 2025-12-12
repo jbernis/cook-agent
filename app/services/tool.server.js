@@ -11,6 +11,52 @@ import AppConfig from "./config.server";
  */
 export function createToolService() {
   /**
+   * Best-effort parser for MCP tool responses.
+   * MCP tool content is commonly shaped like: [{ type: "text", text: "{...json...}" }]
+   * but can vary, so we scan and try to parse.
+   * @param {any} toolUseResponse
+   * @returns {any|null}
+   */
+  const parseToolResponseData = (toolUseResponse) => {
+    try {
+      const content = toolUseResponse?.content;
+      if (!content) return null;
+
+      // If it's already an object (not an array), treat it as parsed.
+      if (typeof content === 'object' && !Array.isArray(content)) return content;
+
+      const blocks = Array.isArray(content) ? content : [content];
+
+      for (const block of blocks) {
+        if (!block) continue;
+
+        // Common MCP text block: { type: "text", text: "..." }
+        if (typeof block === 'object' && typeof block.text === 'string') {
+          const txt = block.text.trim();
+          if (!txt) continue;
+          try { return JSON.parse(txt); } catch { /* ignore */ }
+        }
+
+        // Sometimes tools may return the object directly
+        if (typeof block === 'object' && !Array.isArray(block)) {
+          return block;
+        }
+
+        if (typeof block === 'string') {
+          const txt = block.trim();
+          if (!txt) continue;
+          try { return JSON.parse(txt); } catch { /* ignore */ }
+        }
+      }
+
+      return null;
+    } catch (e) {
+      console.error("Error parsing tool response content:", e);
+      return null;
+    }
+  };
+
+  /**
    * Handles a tool error response
    * @param {Object} toolUseResponse - The error response from the tool
    * @param {string} toolName - The name of the tool
@@ -47,7 +93,9 @@ export function createToolService() {
 
     // Also show a product card when the model fetches product details
     if (toolName === AppConfig.tools.productDetailsName) {
-      productsToDisplay.push(...processProductDetailsResult(toolUseResponse));
+      const detailsProducts = processProductDetailsResult(toolUseResponse);
+      console.log(`Processing product details result → ${detailsProducts.length} product(s) to display`);
+      productsToDisplay.push(...detailsProducts);
     }
 
     addToolResultToHistory(conversationHistory, toolUseId, toolUseResponse.content, conversationId);
@@ -63,27 +111,14 @@ export function createToolService() {
       console.log("Processing product search result");
       let products = [];
 
-      if (toolUseResponse.content && toolUseResponse.content.length > 0) {
-        const content = toolUseResponse.content[0].text;
+      const responseData = parseToolResponseData(toolUseResponse);
 
-        try {
-          let responseData;
-          if (typeof content === 'object') {
-            responseData = content;
-          } else if (typeof content === 'string') {
-            responseData = JSON.parse(content);
-          }
+      if (responseData?.products && Array.isArray(responseData.products)) {
+        products = responseData.products
+          .slice(0, AppConfig.tools.maxProductsToDisplay)
+          .map(formatProductData);
 
-          if (responseData?.products && Array.isArray(responseData.products)) {
-            products = responseData.products
-              .slice(0, AppConfig.tools.maxProductsToDisplay)
-              .map(formatProductData);
-
-            console.log(`Found ${products.length} products to display`);
-          }
-        } catch (e) {
-          console.error("Error parsing product data:", e);
-        }
+        console.log(`Found ${products.length} products to display`);
       }
 
       return products;
@@ -102,28 +137,18 @@ export function createToolService() {
     try {
       let products = [];
 
-      if (toolUseResponse.content && toolUseResponse.content.length > 0) {
-        const content = toolUseResponse.content[0].text;
+      const responseData = parseToolResponseData(toolUseResponse);
+      if (!responseData) return [];
 
-        try {
-          let responseData;
-          if (typeof content === 'object') {
-            responseData = content;
-          } else if (typeof content === 'string') {
-            responseData = JSON.parse(content);
-          }
+      // Common shapes
+      const rawProduct =
+        responseData?.product ||
+        responseData?.data?.product ||
+        responseData?.products?.[0] ||
+        responseData;
 
-          const rawProduct =
-            responseData?.product ||
-            responseData?.data?.product ||
-            responseData;
-
-          if (rawProduct && typeof rawProduct === 'object') {
-            products = [formatProductData(rawProduct)];
-          }
-        } catch (e) {
-          console.error("Error parsing product details data:", e);
-        }
+      if (rawProduct && typeof rawProduct === 'object') {
+        products = [formatProductData(rawProduct)];
       }
 
       return products;
