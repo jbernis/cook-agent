@@ -250,21 +250,27 @@ async function handleChatSession({
             }
           }
 
-          // Fallback enrichment via Admin API offline session (more reliable for handle/url).
+          // Fallback enrichment via Storefront API offline context (more reliable for handle/url without extra Admin scopes).
           const shop = getShopFromOrigin(shopDomain);
           if (shop) {
+            console.log(`Storefront enrichment attempt: ${products.length} product(s)`, { shop });
             for (const p of products) {
               if (!p) continue;
               if ((p.url && p.url !== '') || (p.handle && p.handle !== '')) continue;
               try {
-                const handle = await resolveProductHandleViaAdmin(shop, p.id);
-                if (handle) {
-                  p.handle = handle;
-                  p.url = `/products/${handle}`;
-                  console.log(`Admin-enriched product ${p.id}:`, { handle });
+                const resolved = await resolveProductLinkViaStorefront(shop, p.id);
+                const handle = resolved?.handle || null;
+                const url = resolved?.url || null;
+
+                if (handle) p.handle = handle;
+                if (url) p.url = url;
+                if (!p.url && p.handle) p.url = `/products/${p.handle}`;
+
+                if (p.url || p.handle) {
+                  console.log(`Storefront-enriched product ${p.id}:`, { url: p.url, handle: p.handle });
                 }
               } catch (e) {
-                console.warn('Admin enrichment failed:', e?.message || e);
+                console.warn('Storefront enrichment failed:', e?.message || e);
               }
             }
           }
@@ -437,27 +443,34 @@ function getShopFromOrigin(origin) {
   }
 }
 
-const productHandleCache = new Map(); // key: `${shop}:${productGid}` -> handle|null
-async function resolveProductHandleViaAdmin(shop, productGid) {
+const productLinkCache = new Map(); // key: `${shop}:${productGid}` -> {handle,url}|null
+
+async function resolveProductLinkViaStorefront(shop, productGid) {
   const key = `${shop}:${productGid}`;
-  if (productHandleCache.has(key)) return productHandleCache.get(key);
+  if (productLinkCache.has(key)) return productLinkCache.get(key);
 
-  const { admin } = await unauthenticated.admin(shop);
-
-  const resp = await admin.graphql(
-    `#graphql
-    query ProductHandle($id: ID!) {
-      product(id: $id) {
-        handle
-      }
-    }`,
-    { variables: { id: productGid } }
-  );
-
-  const json = await resp.json();
-  const handle = json?.data?.product?.handle || null;
-  productHandleCache.set(key, handle);
-  return handle;
+  try {
+    const { storefront } = await unauthenticated.storefront(shop);
+    const resp = await storefront.graphql(
+      `#graphql
+      query ProductLink($id: ID!) {
+        product(id: $id) {
+          handle
+          onlineStoreUrl
+        }
+      }`,
+      { variables: { id: productGid } }
+    );
+    const json = await resp.json();
+    const handle = json?.data?.product?.handle || null;
+    const onlineStoreUrl = json?.data?.product?.onlineStoreUrl || null;
+    const result = handle || onlineStoreUrl ? { handle, url: onlineStoreUrl } : null;
+    productLinkCache.set(key, result);
+    return result;
+  } catch (e) {
+    productLinkCache.set(key, null);
+    throw e;
+  }
 }
 
 /**
