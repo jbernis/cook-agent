@@ -254,13 +254,30 @@ export function createToolService() {
       deepFindFirstString(product, ['handle', 'product_handle', 'productHandle']) ||
       undefined;
 
-    const url =
+    const isLikelyProductPageUrl = (candidate) => {
+      if (typeof candidate !== 'string') return false;
+      const u = candidate.trim();
+      if (!u) return false;
+      // Reject obvious CDN/file links
+      if (/cdn\.shopify\.com/i.test(u)) return false;
+      if (/\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(u)) return false;
+      // Accept relative or absolute product page URLs
+      if (u.startsWith('/products/')) return true;
+      return /\/products\//i.test(u);
+    };
+
+    const rawUrlCandidate =
       ((typeof product.url === 'string' && product.url) ? product.url : undefined) ||
       ((typeof product.product_url === 'string' && product.product_url) ? product.product_url : undefined) ||
       ((typeof product.productUrl === 'string' && product.productUrl) ? product.productUrl : undefined) ||
       ((typeof product.online_store_url === 'string' && product.online_store_url) ? product.online_store_url : undefined) ||
       ((typeof product.onlineStoreUrl === 'string' && product.onlineStoreUrl) ? product.onlineStoreUrl : undefined) ||
-      deepFindFirstString(product, ['url', 'product_url', 'productUrl', 'online_store_url', 'onlineStoreUrl', 'online_store_preview_url', 'onlineStorePreviewUrl']) ||
+      // Deep search but avoid the overly generic "url" key to reduce false positives (like image.url)
+      deepFindFirstString(product, ['product_url', 'productUrl', 'online_store_url', 'onlineStoreUrl', 'online_store_preview_url', 'onlineStorePreviewUrl']) ||
+      '';
+
+    const url =
+      (isLikelyProductPageUrl(rawUrlCandidate) ? rawUrlCandidate : '') ||
       (handle ? `/products/${handle}` : '');
 
     return {
