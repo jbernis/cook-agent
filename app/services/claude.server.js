@@ -15,7 +15,7 @@ export function createClaudeService(apiKey = process.env.CLAUDE_API_KEY) {
   // Initialize Claude client
   const anthropic = new Anthropic({ 
     apiKey: apiKey,
-    baseURL: 'https://proxy.shopify.ai/apis/anthropic'
+    baseURL: 'https://api.anthropic.com'
   });
 
   /**

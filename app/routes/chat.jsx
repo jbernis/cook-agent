@@ -217,7 +217,14 @@ async function handleChatSession({
             const toolArgs = content.input;
             const toolUseId = content.id;
 
-            const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(toolArgs)}`;
+            const augmentedToolArgs = augmentToolArgsWithCartState({
+              toolName,
+              toolArgs,
+              tools: mcpClient.tools,
+              conversationHistory,
+            });
+
+            const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(augmentedToolArgs)}`;
 
             stream.sendMessage({
               type: 'tool_use',
@@ -225,7 +232,7 @@ async function handleChatSession({
             });
 
             // Call the tool
-            const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
+            const toolUseResponse = await mcpClient.callTool(toolName, augmentedToolArgs);
 
             // Handle tool response based on success/error
             if (toolUseResponse.error) {
@@ -360,4 +367,157 @@ function getSseHeaders(request) {
     "Access-Control-Allow-Methods": "GET,OPTIONS,POST",
     "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
   };
+}
+
+/**
+ * Attempts to find the last known cart state (cartId + checkoutUrl) by scanning tool_result blocks.
+ * We intentionally keep this schema-agnostic since MCP tool responses can vary by version.
+ */
+function getLatestCartStateFromConversation(conversationHistory) {
+  if (!Array.isArray(conversationHistory) || conversationHistory.length === 0) return null;
+
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const message = conversationHistory[i];
+    const blocks = Array.isArray(message?.content) ? message.content : [message?.content].filter(Boolean);
+
+    for (const block of blocks) {
+      if (!block || block.type !== "tool_result") continue;
+
+      const extracted = extractCartStateFromUnknown(block.content);
+      if (extracted?.cartId || extracted?.checkoutUrl) return extracted;
+    }
+  }
+
+  return null;
+}
+
+function extractCartStateFromUnknown(value) {
+  // 1) Direct object shapes
+  const direct = extractCartStateFromObject(value);
+  if (direct?.cartId || direct?.checkoutUrl) return direct;
+
+  // 2) Arrays of content blocks from MCP tools, e.g. [{ type: "text", text: "..." }]
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const fromItem = extractCartStateFromUnknown(item);
+      if (fromItem?.cartId || fromItem?.checkoutUrl) return fromItem;
+    }
+  }
+
+  // 3) Text: try JSON then regex
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+
+    // JSON payload inside a text block
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const fromJson = extractCartStateFromUnknown(parsed);
+        if (fromJson?.cartId || fromJson?.checkoutUrl) return fromJson;
+      } catch {
+        // ignore JSON parse errors and fall back to regex
+      }
+    }
+
+    // Common IDs look like gid://shopify/Cart/...
+    const cartIdMatch = trimmed.match(/gid:\/\/shopify\/Cart\/[^\s"'}\]]+/);
+
+    // Checkout URLs vary by shop; we look for a /checkouts/ segment
+    const checkoutUrlMatch = trimmed.match(/https?:\/\/[^\s"'}\]]*\/checkouts\/[^\s"'}\]]+/);
+
+    return {
+      cartId: cartIdMatch ? cartIdMatch[0] : undefined,
+      checkoutUrl: checkoutUrlMatch ? checkoutUrlMatch[0] : undefined,
+    };
+  }
+
+  // 4) Typical MCP text block shape: { type: "text", text: "..." }
+  if (value && typeof value === "object" && typeof value.text === "string") {
+    return extractCartStateFromUnknown(value.text);
+  }
+
+  return null;
+}
+
+function extractCartStateFromObject(obj) {
+  if (!obj || typeof obj !== "object") return null;
+
+  // Common field names
+  const cartId =
+    typeof obj.cartId === "string" ? obj.cartId :
+    typeof obj.cart_id === "string" ? obj.cart_id :
+    undefined;
+
+  const checkoutUrl =
+    typeof obj.checkoutUrl === "string" ? obj.checkoutUrl :
+    typeof obj.checkout_url === "string" ? obj.checkout_url :
+    undefined;
+
+  if (cartId || checkoutUrl) return { cartId, checkoutUrl };
+
+  // Deep search for cart gid / checkout URL (best-effort)
+  for (const value of Object.values(obj)) {
+    const extracted = extractCartStateFromUnknown(value);
+    if (extracted?.cartId || extracted?.checkoutUrl) return extracted;
+  }
+
+  return null;
+}
+
+function pickCartIdArgLocationForTool(toolName, tools) {
+  const tool = Array.isArray(tools) ? tools.find(t => t?.name === toolName) : null;
+  const schema = tool?.input_schema;
+  const props = schema?.properties;
+
+  // Prefer explicit cart id property if present
+  if (props && typeof props === "object") {
+    const keys = Object.keys(props);
+    const directKey =
+      keys.find(k => k === "cartId") ||
+      keys.find(k => k === "cart_id") ||
+      keys.find(k => /cart.*id/i.test(k));
+
+    if (directKey) return { type: "direct", key: directKey };
+
+    // Some schemas may nest under `cart: { id: ... }`
+    const cartProp = props.cart;
+    if (cartProp?.type === "object" && cartProp?.properties?.id) {
+      return { type: "nested", key: "cart", nestedKey: "id" };
+    }
+  }
+
+  // Default (most common)
+  return { type: "direct", key: "cartId" };
+}
+
+function hasAnyCartIdArg(toolArgs) {
+  if (!toolArgs || typeof toolArgs !== "object") return false;
+  if (typeof toolArgs.cartId === "string" && toolArgs.cartId.length > 0) return true;
+  if (typeof toolArgs.cart_id === "string" && toolArgs.cart_id.length > 0) return true;
+  if (toolArgs.cart && typeof toolArgs.cart === "object" && typeof toolArgs.cart.id === "string" && toolArgs.cart.id.length > 0) return true;
+  return false;
+}
+
+/**
+ * Ensures cart tools reuse the existing cart rather than creating a new one.
+ * Today we only auto-augment `update_cart`, but the logic is generic.
+ */
+function augmentToolArgsWithCartState({ toolName, toolArgs, tools, conversationHistory }) {
+  const args = (toolArgs && typeof toolArgs === "object") ? { ...toolArgs } : {};
+
+  if (toolName !== "update_cart") return args;
+  if (hasAnyCartIdArg(args)) return args;
+
+  const latest = getLatestCartStateFromConversation(conversationHistory);
+  if (!latest?.cartId) return args;
+
+  const location = pickCartIdArgLocationForTool(toolName, tools);
+
+  if (location.type === "nested") {
+    args[location.key] = { ...(args[location.key] || {}), [location.nestedKey]: latest.cartId };
+    return args;
+  }
+
+  args[location.key] = latest.cartId;
+  return args;
 }

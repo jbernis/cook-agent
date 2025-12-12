@@ -2,7 +2,29 @@
   "chat": {
     "title": "Store Assistant",
     "inputPlaceholder": "Type your message here...",
+    "welcomeDefault": "👋 Hi there! How can I help you today?",
     "sendButton": "Send",
-    "closeButton": "Close"
+    "closeButton": "Close",
+    "loadingHistory": "Loading conversation history...",
+    "errorGeneric": "Sorry, I couldn't process your request. Please try again later.",
+    "errorBusy": "Sorry, our servers are currently busy. Please try again later.",
+    "checkoutLinkText": "click here to proceed to checkout",
+    "allowPopups": "Please allow popups for this site to authenticate with Shopify.",
+    "authInProgress": "Authentication in progress. Please complete the process in the popup window.",
+    "authSuccessContinue": "Authorization successful! I'm now continuing with your request.",
+    "productTopMatching": "Top Matching Products",
+    "productNoneFound": "No products found",
+    "addToCart": "Add to Cart",
+    "addToCartPrompt": "Add {{title}} to my cart",
+    "schema": {
+      "blockName": "AI Chat Assistant",
+      "settings": {
+        "chatBubbleColor": "Chat bubble color",
+        "welcomeMessage": "Welcome message",
+        "systemPrompt": "System prompt",
+        "standardAssistant": "Standard assistant",
+        "enthusiasticAssistant": "Enthusiastic assistant"
+      }
+    }
   }
 }

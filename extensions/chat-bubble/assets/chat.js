@@ -7,6 +7,35 @@
 (function() {
   'use strict';
 
+  const I18N = (window.shopChatConfig && window.shopChatConfig.i18n) ? window.shopChatConfig.i18n : {};
+
+  /**
+   * Simple i18n helper for user-visible strings.
+   * @param {string} key
+   * @param {string} fallback
+   * @returns {string}
+   */
+  function t(key, fallback) {
+    const value = I18N[key];
+    return (typeof value === 'string' && value.length > 0) ? value : fallback;
+  }
+
+  /**
+   * Very small template helper for strings like "Add {{title}} to my cart"
+   * @param {string} str
+   * @param {Record<string, string>} vars
+   * @returns {string}
+   */
+  function template(str, vars) {
+    if (typeof str !== 'string') return '';
+    return str.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, key) => {
+      if (Object.prototype.hasOwnProperty.call(vars, key)) return String(vars[key]);
+      return match;
+    });
+  }
+
+  const LOADING_HISTORY_TEXT = t('loadingHistory', 'Loading conversation history...');
+
   /**
    * Application namespace to prevent global scope pollution
    */
@@ -199,7 +228,7 @@
         // Add a header for the product results
         const header = document.createElement('div');
         header.classList.add('shop-ai-product-header');
-        header.innerHTML = '<h4>Top Matching Products</h4>';
+        header.innerHTML = `<h4>${t('productTopMatching', 'Top Matching Products')}</h4>`;
         productSection.appendChild(header);
 
         // Create the product grid container
@@ -209,7 +238,7 @@
 
         if (!products || !Array.isArray(products) || products.length === 0) {
           const noProductsMessage = document.createElement('p');
-          noProductsMessage.textContent = "No products found";
+          noProductsMessage.textContent = t('productNoneFound', 'No products found');
           noProductsMessage.style.padding = "10px";
           productsContainer.appendChild(noProductsMessage);
         } else {
@@ -250,7 +279,7 @@
         } catch (error) {
           console.error('Error communicating with Claude API:', error);
           ShopAIChat.UI.removeTypingIndicator();
-          this.add("Sorry, I couldn't process your request at the moment. Please try again later.", 'assistant', messagesContainer);
+          this.add(t('errorGeneric', "Sorry, I couldn't process your request at the moment. Please try again later."), 'assistant', messagesContainer);
         }
       },
 
@@ -381,7 +410,7 @@
           }
           // If it's a checkout link, replace the text
           else if (url.includes('/cart') || url.includes('checkout')) {
-            return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">click here to proceed to checkout</a>';
+            return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + t('checkoutLinkText', 'click here to proceed to checkout') + '</a>';
           } else {
             // For normal links, preserve the original text
             return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + text + '</a>';
@@ -530,7 +559,7 @@
         } catch (error) {
           console.error('Error in streaming:', error);
           ShopAIChat.UI.removeTypingIndicator();
-          ShopAIChat.Message.add("Sorry, I couldn't process your request. Please try again later.",
+          ShopAIChat.Message.add(t('errorGeneric', "Sorry, I couldn't process your request. Please try again later."),
             'assistant', messagesContainer);
         }
       },
@@ -571,13 +600,13 @@
           case 'error':
             console.error('Stream error:', data.error);
             ShopAIChat.UI.removeTypingIndicator();
-            currentMessageElement.textContent = "Sorry, I couldn't process your request. Please try again later.";
+            currentMessageElement.textContent = t('errorGeneric', "Sorry, I couldn't process your request. Please try again later.");
             break;
 
           case 'rate_limit_exceeded':
             console.error('Rate limit exceeded:', data.error);
             ShopAIChat.UI.removeTypingIndicator();
-            currentMessageElement.textContent = "Sorry, our servers are currently busy. Please try again later.";
+            currentMessageElement.textContent = t('errorBusy', "Sorry, our servers are currently busy. Please try again later.");
             break;
 
           case 'auth_required':
@@ -626,7 +655,7 @@
           // Show a loading message
           const loadingMessage = document.createElement('div');
           loadingMessage.classList.add('shop-ai-message', 'assistant');
-          loadingMessage.textContent = "Loading conversation history...";
+          loadingMessage.textContent = LOADING_HISTORY_TEXT;
           messagesContainer.appendChild(loadingMessage);
 
           // Fetch history from the server
@@ -654,7 +683,7 @@
 
           // No messages, show welcome message
           if (!data.messages || data.messages.length === 0) {
-            const welcomeMessage = window.shopChatConfig?.welcomeMessage || "👋 Hi there! How can I help you today?";
+            const welcomeMessage = window.shopChatConfig?.welcomeMessage || t('welcomeDefault', "👋 Hi there! How can I help you today?");
             ShopAIChat.Message.add(welcomeMessage, 'assistant', messagesContainer);
             return;
           }
@@ -681,12 +710,12 @@
 
           // Remove loading message if it exists
           const loadingMessage = messagesContainer.querySelector('.shop-ai-message.assistant');
-          if (loadingMessage && loadingMessage.textContent === "Loading conversation history...") {
+          if (loadingMessage && loadingMessage.textContent === LOADING_HISTORY_TEXT) {
             messagesContainer.removeChild(loadingMessage);
           }
 
           // Show error and welcome message
-          const welcomeMessage = window.shopChatConfig?.welcomeMessage || "👋 Hi there! How can I help you today?";
+          const welcomeMessage = window.shopChatConfig?.welcomeMessage || t('welcomeDefault', "👋 Hi there! How can I help you today?");
           ShopAIChat.Message.add(welcomeMessage, 'assistant', messagesContainer);
 
           // Clear the conversation ID since we couldn't fetch this conversation
@@ -734,7 +763,7 @@
           popup.focus();
         } else {
           // If popup was blocked, show a message
-          alert('Please allow popups for this site to authenticate with Shopify.');
+          alert(t('allowPopups', 'Please allow popups for this site to authenticate with Shopify.'));
         }
 
         // Start polling for token availability
@@ -743,7 +772,7 @@
           const messagesContainer = document.querySelector('.shop-ai-chat-messages');
 
           // Add a message to indicate authentication is in progress
-          ShopAIChat.Message.add("Authentication in progress. Please complete the process in the popup window.",
+          ShopAIChat.Message.add(t('authInProgress', "Authentication in progress. Please complete the process in the popup window."),
             'assistant', messagesContainer);
 
           this.startTokenPolling(conversationId, messagesContainer);
@@ -796,7 +825,7 @@
               if (message) {
                 sessionStorage.removeItem('shopAiLastMessage');
                 setTimeout(() => {
-                  ShopAIChat.Message.add("Authorization successful! I'm now continuing with your request.",
+                  ShopAIChat.Message.add(t('authSuccessContinue', "Authorization successful! I'm now continuing with your request."),
                     'assistant', messagesContainer);
                   ShopAIChat.API.streamResponse(message, conversationId, messagesContainer);
                   ShopAIChat.UI.showTypingIndicator();
@@ -877,7 +906,7 @@
         // Add add-to-cart button
         const button = document.createElement('button');
         button.classList.add('shop-ai-add-to-cart');
-        button.textContent = 'Add to Cart';
+        button.textContent = t('addToCart', 'Add to Cart');
         button.dataset.productId = product.id;
 
         // Add click handler for the button
@@ -885,7 +914,8 @@
           // Send message to add this product to cart
           const input = document.querySelector('.shop-ai-chat-input input');
           if (input) {
-            input.value = `Add ${product.title} to my cart`;
+            const promptTemplate = t('addToCartPrompt', 'Add {{title}} to my cart');
+            input.value = template(promptTemplate, { title: product.title });
             // Trigger a click on the send button
             const sendButton = document.querySelector('.shop-ai-chat-send');
             if (sendButton) {
@@ -919,7 +949,7 @@
         this.API.fetchChatHistory(conversationId, this.UI.elements.messagesContainer);
       } else {
         // No previous conversation, show welcome message
-        const welcomeMessage = window.shopChatConfig?.welcomeMessage || "👋 Hi there! How can I help you today?";
+        const welcomeMessage = window.shopChatConfig?.welcomeMessage || t('welcomeDefault', "👋 Hi there! How can I help you today?");
         this.Message.add(welcomeMessage, 'assistant', this.UI.elements.messagesContainer);
       }
     }

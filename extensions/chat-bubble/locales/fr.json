@@ -1,0 +1,32 @@
+{
+  "chat": {
+    "title": "Assistant de la boutique",
+    "inputPlaceholder": "Écrivez votre message ici…",
+    "welcomeDefault": "👋 Bonjour ! Comment puis-je vous aider aujourd’hui ?",
+    "sendButton": "Envoyer",
+    "closeButton": "Fermer",
+    "loadingHistory": "Chargement de l’historique de conversation…",
+    "errorGeneric": "Désolé, je n’ai pas pu traiter votre demande. Veuillez réessayer plus tard.",
+    "errorBusy": "Désolé, nos serveurs sont actuellement surchargés. Veuillez réessayer plus tard.",
+    "checkoutLinkText": "cliquez ici pour passer au paiement",
+    "allowPopups": "Veuillez autoriser les fenêtres pop-up sur ce site pour vous authentifier avec Shopify.",
+    "authInProgress": "Authentification en cours. Veuillez terminer la procédure dans la fenêtre pop-up.",
+    "authSuccessContinue": "Autorisation réussie ! Je reprends votre demande.",
+    "productTopMatching": "Produits les plus pertinents",
+    "productNoneFound": "Aucun produit trouvé",
+    "addToCart": "Ajouter au panier",
+    "addToCartPrompt": "Ajoute {{title}} à mon panier",
+    "schema": {
+      "blockName": "Assistant IA (chat)",
+      "settings": {
+        "chatBubbleColor": "Couleur de la bulle de chat",
+        "welcomeMessage": "Message de bienvenue",
+        "systemPrompt": "Invite système",
+        "standardAssistant": "Assistant standard",
+        "enthusiasticAssistant": "Assistant enthousiaste"
+      }
+    }
+  }
+}
+
+
