@@ -1,0 +1,17 @@
+{
+  "chat": {
+    "schema": {
+      "blockName": "Assistant IA (chat)",
+      "settings": {
+        "chatBubbleColor": "Couleur de la bulle de chat",
+        "welcomeMessage": "Message de bienvenue",
+        "systemPrompt": "Invite système",
+        "standardAssistant": "Assistant standard",
+        "enthusiasticAssistant": "Assistant enthousiaste",
+        "debugLogging": "Activer les logs de debug"
+      }
+    }
+  }
+}
+
+
