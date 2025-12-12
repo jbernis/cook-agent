@@ -197,6 +197,7 @@ export function createToolService() {
       price: price,
       image_url: product.image_url || '',
       description: product.description || '',
+      handle,
       url,
       variant_id: variantId,
     };
@@ -236,6 +237,7 @@ export function createToolService() {
     handleToolError,
     handleToolSuccess,
     processProductSearchResult,
+    processProductDetailsResult,
     addToolResultToHistory
   };
 }

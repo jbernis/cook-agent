@@ -1224,6 +1224,11 @@
         const card = document.createElement('div');
         card.classList.add('shop-ai-product-card');
 
+        const productLink =
+          (product && typeof product.url === 'string' && product.url.length > 0) ? product.url :
+          (product && typeof product.handle === 'string' && product.handle.length > 0) ? `/products/${product.handle}` :
+          null;
+
         // Create image container
         const imageContainer = document.createElement('div');
         imageContainer.classList.add('shop-ai-product-image');
@@ -1236,10 +1241,10 @@
           // If image fails to load, use a fallback placeholder
           this.src = 'https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-image_large.png';
         };
-        // If product has a URL, make the image clickable
-        if (product.url) {
+        // If product has a URL/handle, make the image clickable
+        if (productLink) {
           const imageLink = document.createElement('a');
-          imageLink.href = product.url;
+          imageLink.href = productLink;
           imageLink.target = '_blank';
           imageLink.rel = 'noopener noreferrer';
           imageLink.appendChild(image);
@@ -1258,10 +1263,10 @@
         title.classList.add('shop-ai-product-title');
         title.textContent = product.title;
 
-        // If product has a URL, make the title a link
-        if (product.url) {
+        // If product has a URL/handle, make the title a link
+        if (productLink) {
           const titleLink = document.createElement('a');
-          titleLink.href = product.url;
+          titleLink.href = productLink;
           titleLink.target = '_blank';
           titleLink.textContent = product.title;
           title.textContent = '';

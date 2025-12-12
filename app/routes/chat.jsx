@@ -122,6 +122,7 @@ async function handleChatSession({
   // Tools we intentionally hide/disable. (We prefer Online Store cart via /cart.js + /cart/add.js.)
   const DISABLED_MCP_TOOLS = new Set(["update_cart", "get_cart"]);
   const CATALOG_SEARCH_TOOL = AppConfig.tools.productSearchName;
+  const PRODUCT_DETAILS_TOOL = AppConfig.tools.productDetailsName;
 
   // Initialize services
   const claudeService = createClaudeService();
@@ -225,6 +226,25 @@ async function handleChatSession({
 
         const products = toolService.processProductSearchResult(toolUseResponse);
         if (products && products.length > 0) {
+          // Best-effort enrichment: fetch product details to get a handle/url for clickable product cards.
+          if (Array.isArray(mcpClient.tools) &&
+              mcpClient.tools.some(t => t?.name === PRODUCT_DETAILS_TOOL)) {
+            for (const p of products) {
+              if (p && (!p.url || p.url === '')) {
+                try {
+                  const detailsResponse = await mcpClient.callTool(PRODUCT_DETAILS_TOOL, { product_id: p.id });
+                  if (!detailsResponse?.error) {
+                    const detailsProducts = toolService.processProductDetailsResult(detailsResponse);
+                    const details = Array.isArray(detailsProducts) ? detailsProducts[0] : null;
+                    if (details?.url) p.url = details.url;
+                    if (details?.handle) p.handle = details.handle;
+                  }
+                } catch (e) {
+                  console.warn('Product details enrichment failed:', e?.message || e);
+                }
+              }
+            }
+          }
           productsToDisplay.push(...products);
         }
       } catch (e) {
