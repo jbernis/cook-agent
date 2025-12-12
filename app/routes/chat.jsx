@@ -8,6 +8,7 @@ import AppConfig from "../services/config.server";
 import { createSseStream } from "../services/streaming.server";
 import { createClaudeService } from "../services/claude.server";
 import { createToolService } from "../services/tool.server";
+import { unauthenticated } from "../shopify.server";
 
 
 /**
@@ -248,6 +249,26 @@ async function handleChatSession({
               }
             }
           }
+
+          // Fallback enrichment via Admin API offline session (more reliable for handle/url).
+          const shop = getShopFromOrigin(shopDomain);
+          if (shop) {
+            for (const p of products) {
+              if (!p) continue;
+              if ((p.url && p.url !== '') || (p.handle && p.handle !== '')) continue;
+              try {
+                const handle = await resolveProductHandleViaAdmin(shop, p.id);
+                if (handle) {
+                  p.handle = handle;
+                  p.url = `/products/${handle}`;
+                  console.log(`Admin-enriched product ${p.id}:`, { handle });
+                }
+              } catch (e) {
+                console.warn('Admin enrichment failed:', e?.message || e);
+              }
+            }
+          }
+
           productsToDisplay.push(...products);
         }
       } catch (e) {
@@ -404,6 +425,39 @@ function getPreviousUserTextMessage(conversationHistory) {
     if (typeof msg?.content === 'string' && msg.content.trim().length > 0) return msg.content.trim();
   }
   return null;
+}
+
+function getShopFromOrigin(origin) {
+  try {
+    if (!origin) return null;
+    const { hostname } = new URL(origin);
+    return hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+const productHandleCache = new Map(); // key: `${shop}:${productGid}` -> handle|null
+async function resolveProductHandleViaAdmin(shop, productGid) {
+  const key = `${shop}:${productGid}`;
+  if (productHandleCache.has(key)) return productHandleCache.get(key);
+
+  const { admin } = await unauthenticated.admin(shop);
+
+  const resp = await admin.graphql(
+    `#graphql
+    query ProductHandle($id: ID!) {
+      product(id: $id) {
+        handle
+      }
+    }`,
+    { variables: { id: productGid } }
+  );
+
+  const json = await resp.json();
+  const handle = json?.data?.product?.handle || null;
+  productHandleCache.set(key, handle);
+  return handle;
 }
 
 /**
