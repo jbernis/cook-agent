@@ -1245,8 +1245,7 @@
         if (productLink) {
           const imageLink = document.createElement('a');
           imageLink.href = productLink;
-          imageLink.target = '_blank';
-          imageLink.rel = 'noopener noreferrer';
+          // Open in the same tab
           imageLink.appendChild(image);
           imageContainer.appendChild(imageLink);
         } else {
@@ -1267,7 +1266,7 @@
         if (productLink) {
           const titleLink = document.createElement('a');
           titleLink.href = productLink;
-          titleLink.target = '_blank';
+          // Open in the same tab
           titleLink.textContent = product.title;
           title.textContent = '';
           title.appendChild(titleLink);
