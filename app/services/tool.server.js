@@ -45,6 +45,11 @@ export function createToolService() {
       productsToDisplay.push(...processProductSearchResult(toolUseResponse));
     }
 
+    // Also show a product card when the model fetches product details
+    if (toolName === AppConfig.tools.productDetailsName) {
+      productsToDisplay.push(...processProductDetailsResult(toolUseResponse));
+    }
+
     addToolResultToHistory(conversationHistory, toolUseId, toolUseResponse.content, conversationId);
   };
 
@@ -84,6 +89,46 @@ export function createToolService() {
       return products;
     } catch (error) {
       console.error("Error processing product search results:", error);
+      return [];
+    }
+  };
+
+  /**
+   * Processes product details results
+   * @param {Object} toolUseResponse - The response from the tool
+   * @returns {Array} Array with a single formatted product (or empty)
+   */
+  const processProductDetailsResult = (toolUseResponse) => {
+    try {
+      let products = [];
+
+      if (toolUseResponse.content && toolUseResponse.content.length > 0) {
+        const content = toolUseResponse.content[0].text;
+
+        try {
+          let responseData;
+          if (typeof content === 'object') {
+            responseData = content;
+          } else if (typeof content === 'string') {
+            responseData = JSON.parse(content);
+          }
+
+          const rawProduct =
+            responseData?.product ||
+            responseData?.data?.product ||
+            responseData;
+
+          if (rawProduct && typeof rawProduct === 'object') {
+            products = [formatProductData(rawProduct)];
+          }
+        } catch (e) {
+          console.error("Error parsing product details data:", e);
+        }
+      }
+
+      return products;
+    } catch (error) {
+      console.error("Error processing product details results:", error);
       return [];
     }
   };
