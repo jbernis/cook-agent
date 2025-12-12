@@ -67,6 +67,58 @@
     },
 
     /**
+     * Persistence helpers (sessionStorage)
+     */
+    Persistence: {
+      LAST_PRODUCTS_KEY: 'shopAiLastProductResults',
+      LAST_PRODUCTS_CONVERSATION_KEY: 'shopAiLastProductResultsConversationId',
+
+      saveLastProducts: function(products) {
+        try {
+          sessionStorage.setItem(this.LAST_PRODUCTS_KEY, JSON.stringify(products));
+          const conversationId = sessionStorage.getItem('shopAiConversationId');
+          if (conversationId) {
+            sessionStorage.setItem(this.LAST_PRODUCTS_CONVERSATION_KEY, conversationId);
+          }
+        } catch (e) {
+          debugWarn('Unable to persist last product results', e);
+        }
+      },
+
+      loadLastProductsForConversation: function(conversationId) {
+        try {
+          const storedConversationId = sessionStorage.getItem(this.LAST_PRODUCTS_CONVERSATION_KEY);
+          if (!storedConversationId || !conversationId || storedConversationId !== conversationId) return null;
+
+          const raw = sessionStorage.getItem(this.LAST_PRODUCTS_KEY);
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : null;
+        } catch (e) {
+          debugWarn('Unable to load last product results', e);
+          return null;
+        }
+      },
+
+      restoreProductCardsIfMissing: function(conversationId, messagesContainer) {
+        try {
+          if (!messagesContainer) return;
+          // If there are already product sections in the DOM, don't add duplicates.
+          if (messagesContainer.querySelector('.shop-ai-product-section')) return;
+
+          const products = this.loadLastProductsForConversation(conversationId);
+          if (!products || products.length === 0) return;
+
+          debugLog('Restoring product cards after navigation', { count: products.length, conversationId });
+          // Append the last known product results to the chat (does not overwrite lastProductResults).
+          ShopAIChat.UI.displayProductResults(products, { storeAsLastResults: false });
+        } catch (e) {
+          debugWarn('Unable to restore product cards', e);
+        }
+      }
+    },
+
+    /**
      * UI-related elements and functionality
      */
     UI: {
@@ -299,11 +351,7 @@
             debugLog('Stored lastProductResults', { count: products.length });
 
             // Persist across reloads so selection like "the second one" works reliably.
-            try {
-              sessionStorage.setItem('shopAiLastProductResults', JSON.stringify(products));
-            } catch (e) {
-              debugWarn('Unable to persist lastProductResults to sessionStorage', e);
-            }
+            ShopAIChat.Persistence.saveLastProducts(products);
           }
 
           products.forEach(product => {
@@ -972,6 +1020,9 @@
             }
           });
 
+          // If the shopper navigated to another page, restore the most recent product cards for this conversation.
+          ShopAIChat.Persistence.restoreProductCardsIfMissing(conversationId, messagesContainer);
+
           // Scroll to bottom
           ShopAIChat.UI.scrollToBottom();
 
@@ -1492,7 +1543,7 @@
 
       // Restore last product results (best-effort) so ordinal selections work after reload.
       try {
-        const persisted = sessionStorage.getItem('shopAiLastProductResults');
+        const persisted = sessionStorage.getItem(ShopAIChat.Persistence.LAST_PRODUCTS_KEY);
         if (persisted) {
           const parsed = JSON.parse(persisted);
           if (Array.isArray(parsed)) {
