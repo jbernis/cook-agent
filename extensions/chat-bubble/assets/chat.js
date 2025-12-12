@@ -274,6 +274,13 @@
           if (storeAsLastResults) {
             ShopAIChat.state.lastProductResults = products;
             debugLog('Stored lastProductResults', { count: products.length });
+
+            // Persist across reloads so selection like "the second one" works reliably.
+            try {
+              sessionStorage.setItem('shopAiLastProductResults', JSON.stringify(products));
+            } catch (e) {
+              debugWarn('Unable to persist lastProductResults to sessionStorage', e);
+            }
           }
 
           products.forEach(product => {
@@ -514,6 +521,11 @@
             if (idx >= 0 && idx < max) return idx;
             return null;
           }
+        }
+
+        // "last"/"final"/"dernier/derniere" selections
+        if (tokens.includes('last') || tokens.includes('final') || tokens.includes('dernier') || tokens.includes('derniere')) {
+          return max - 1;
         }
 
         return null;
@@ -1378,6 +1390,20 @@
       if (!container) return;
 
       this.UI.init(container);
+
+      // Restore last product results (best-effort) so ordinal selections work after reload.
+      try {
+        const persisted = sessionStorage.getItem('shopAiLastProductResults');
+        if (persisted) {
+          const parsed = JSON.parse(persisted);
+          if (Array.isArray(parsed)) {
+            this.state.lastProductResults = parsed;
+            debugLog('Restored lastProductResults from sessionStorage', { count: parsed.length });
+          }
+        }
+      } catch (e) {
+        debugWarn('Unable to restore lastProductResults from sessionStorage', e);
+      }
 
       // Check for existing conversation
       const conversationId = sessionStorage.getItem('shopAiConversationId');
