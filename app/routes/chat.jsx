@@ -119,6 +119,9 @@ async function handleChatSession({
   promptType,
   stream
 }) {
+  // Tools we intentionally hide/disable. (We prefer Online Store cart via /cart.js + /cart/add.js.)
+  const DISABLED_MCP_TOOLS = new Set(["update_cart", "get_cart"]);
+
   // Initialize services
   const claudeService = createClaudeService();
   const toolService = createToolService();
@@ -150,6 +153,11 @@ async function handleChatSession({
       console.log(`Connected to customer MCP with ${customerMcpTools.length} tools`);
     } catch (error) {
       console.warn('Failed to connect to MCP servers, continuing without tools:', error.message);
+    }
+
+    // Hide disabled tools from the model (so it won't try calling them).
+    if (Array.isArray(mcpClient.tools) && mcpClient.tools.length > 0) {
+      mcpClient.tools = mcpClient.tools.filter((t) => !DISABLED_MCP_TOOLS.has(t?.name));
     }
 
     // Prepare conversation state
@@ -216,6 +224,25 @@ async function handleChatSession({
             const toolName = content.name;
             const toolArgs = content.input;
             const toolUseId = content.id;
+
+            if (DISABLED_MCP_TOOLS.has(toolName)) {
+              const msg = `Tool '${toolName}' is disabled in this app. Please use the Online Store cart instead.`;
+
+              stream.sendMessage({
+                type: 'tool_use',
+                tool_use_message: `Blocked tool: ${toolName}`
+              });
+
+              await toolService.addToolResultToHistory(
+                conversationHistory,
+                toolUseId,
+                msg,
+                conversationId
+              );
+
+              stream.sendMessage({ type: 'new_message' });
+              return;
+            }
 
             const augmentedToolArgs = augmentToolArgsWithCartState({
               toolName,
