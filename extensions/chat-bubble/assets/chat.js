@@ -316,6 +316,22 @@
         ShopAIChat.UI.showTypingIndicator();
 
         try {
+          // If we don't currently have last results in memory, try restoring them before parsing selection.
+          if (!Array.isArray(ShopAIChat.state.lastProductResults) || ShopAIChat.state.lastProductResults.length === 0) {
+            try {
+              const persisted = sessionStorage.getItem('shopAiLastProductResults');
+              if (persisted) {
+                const parsed = JSON.parse(persisted);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  ShopAIChat.state.lastProductResults = parsed;
+                  debugLog('Restored lastProductResults from sessionStorage (on send)', { count: parsed.length });
+                }
+              }
+            } catch (e) {
+              debugWarn('Unable to restore lastProductResults from sessionStorage (on send)', e);
+            }
+          }
+
           // If the user picks "the 2nd one" from the last product results, render that product card locally.
           const selectionIndex = ShopAIChat.Selection
             ? ShopAIChat.Selection.parseSelectedIndex(userMessage, ShopAIChat.state.lastProductResults?.length || 0)
@@ -800,7 +816,13 @@
             break;
 
           case 'product_results':
-            ShopAIChat.UI.displayProductResults(data.products);
+            // Don't overwrite a multi-product list with a single-product widget (keeps ordinal selection reliable).
+            if (Array.isArray(data.products) && data.products.length === 1 &&
+                Array.isArray(ShopAIChat.state.lastProductResults) && ShopAIChat.state.lastProductResults.length > 1) {
+              ShopAIChat.UI.displayProductResults(data.products, { storeAsLastResults: false });
+            } else {
+              ShopAIChat.UI.displayProductResults(data.products);
+            }
             break;
 
           case 'tool_use':
