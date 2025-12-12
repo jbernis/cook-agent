@@ -180,6 +180,44 @@ export function createToolService() {
    * @returns {Object} Formatted product data
    */
   const formatProductData = (product) => {
+    const deepFindFirstString = (obj, keys) => {
+      try {
+        const keySet = new Set(keys);
+        const visited = new Set();
+
+        const visit = (value) => {
+          if (!value) return undefined;
+          if (typeof value === 'string') return undefined;
+          if (typeof value !== 'object') return undefined;
+          if (visited.has(value)) return undefined;
+          visited.add(value);
+
+          if (Array.isArray(value)) {
+            for (const item of value) {
+              const found = visit(item);
+              if (found) return found;
+            }
+            return undefined;
+          }
+
+          for (const [k, v] of Object.entries(value)) {
+            if (keySet.has(k) && typeof v === 'string' && v) return v;
+          }
+
+          for (const v of Object.values(value)) {
+            const found = visit(v);
+            if (found) return found;
+          }
+
+          return undefined;
+        };
+
+        return visit(obj);
+      } catch {
+        return undefined;
+      }
+    };
+
     const price = product.price_range
       ? `${product.price_range.currency} ${product.price_range.min}`
       : (product.variants && product.variants.length > 0
@@ -197,6 +235,7 @@ export function createToolService() {
       (typeof product.handle === 'string' && product.handle) ? product.handle :
       (typeof product.product_handle === 'string' && product.product_handle) ? product.product_handle :
       (typeof product.productHandle === 'string' && product.productHandle) ? product.productHandle :
+      deepFindFirstString(product, ['handle', 'product_handle', 'productHandle']) :
       undefined;
 
     const url =
@@ -205,6 +244,7 @@ export function createToolService() {
       (typeof product.productUrl === 'string' && product.productUrl) ? product.productUrl :
       (typeof product.online_store_url === 'string' && product.online_store_url) ? product.online_store_url :
       (typeof product.onlineStoreUrl === 'string' && product.onlineStoreUrl) ? product.onlineStoreUrl :
+      deepFindFirstString(product, ['url', 'product_url', 'productUrl', 'online_store_url', 'onlineStoreUrl', 'online_store_preview_url', 'onlineStorePreviewUrl']) :
       (handle ? `/products/${handle}` : '');
 
     return {
