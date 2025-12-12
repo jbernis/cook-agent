@@ -1236,7 +1236,17 @@
           // If image fails to load, use a fallback placeholder
           this.src = 'https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-image_large.png';
         };
-        imageContainer.appendChild(image);
+        // If product has a URL, make the image clickable
+        if (product.url) {
+          const imageLink = document.createElement('a');
+          imageLink.href = product.url;
+          imageLink.target = '_blank';
+          imageLink.rel = 'noopener noreferrer';
+          imageLink.appendChild(image);
+          imageContainer.appendChild(imageLink);
+        } else {
+          imageContainer.appendChild(image);
+        }
         card.appendChild(imageContainer);
 
         // Add product info
