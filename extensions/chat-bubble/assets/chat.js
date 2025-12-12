@@ -124,7 +124,7 @@
     UI: {
       elements: {},
       isMobile: false,
-      _OPEN_STATE_KEY: 'shopAiChatIsOpen',
+      _OPEN_ON_NEXT_PAGE_KEY: 'shopAiOpenChatOnNextPage',
 
       /**
        * Initialize UI elements and event listeners
@@ -227,7 +227,6 @@
         chatWindow.classList.toggle('active');
 
         if (chatWindow.classList.contains('active')) {
-          try { sessionStorage.setItem(this._OPEN_STATE_KEY, '1'); } catch { /* ignore */ }
           // On mobile, prevent body scrolling and delay focus
           if (this.isMobile) {
             document.body.classList.add('shop-ai-chat-open');
@@ -238,7 +237,6 @@
           // Always scroll messages to bottom when opening
           this.scrollToBottom();
         } else {
-          try { sessionStorage.setItem(this._OPEN_STATE_KEY, '0'); } catch { /* ignore */ }
           // Remove body class when closing
           document.body.classList.remove('shop-ai-chat-open');
         }
@@ -252,7 +250,6 @@
         if (!chatWindow) return;
         if (chatWindow.classList.contains('active')) return;
         chatWindow.classList.add('active');
-        try { sessionStorage.setItem(this._OPEN_STATE_KEY, '1'); } catch { /* ignore */ }
 
         if (this.isMobile) {
           document.body.classList.add('shop-ai-chat-open');
@@ -270,7 +267,6 @@
         const { chatWindow, chatInput } = this.elements;
 
         chatWindow.classList.remove('active');
-        try { sessionStorage.setItem(this._OPEN_STATE_KEY, '0'); } catch { /* ignore */ }
 
         // On mobile, blur input to hide keyboard and enable body scrolling
         if (this.isMobile) {
@@ -1319,7 +1315,10 @@
         if (productLink) {
           const imageLink = document.createElement('a');
           imageLink.href = productLink;
-          // Open in the same tab
+          // Open in the same tab. Persist "open chat on next page" so navigation keeps the chat visible.
+          imageLink.addEventListener('click', function() {
+            try { sessionStorage.setItem(ShopAIChat.UI._OPEN_ON_NEXT_PAGE_KEY, '1'); } catch { /* ignore */ }
+          });
           imageLink.appendChild(image);
           imageContainer.appendChild(imageLink);
         } else {
@@ -1340,7 +1339,10 @@
         if (productLink) {
           const titleLink = document.createElement('a');
           titleLink.href = productLink;
-          // Open in the same tab
+          // Open in the same tab. Persist "open chat on next page" so navigation keeps the chat visible.
+          titleLink.addEventListener('click', function() {
+            try { sessionStorage.setItem(ShopAIChat.UI._OPEN_ON_NEXT_PAGE_KEY, '1'); } catch { /* ignore */ }
+          });
           titleLink.textContent = product.title;
           title.textContent = '';
           title.appendChild(titleLink);
@@ -1555,9 +1557,10 @@
         debugWarn('Unable to restore lastProductResults from sessionStorage', e);
       }
 
-      // Restore chat open state across navigation
+      // Re-open chat only when the user navigated by clicking a product card link (not on manual reload).
       try {
-        if (sessionStorage.getItem(this.UI._OPEN_STATE_KEY) === '1') {
+        if (sessionStorage.getItem(this.UI._OPEN_ON_NEXT_PAGE_KEY) === '1') {
+          sessionStorage.removeItem(this.UI._OPEN_ON_NEXT_PAGE_KEY);
           this.UI.openChatWindow();
         }
       } catch {
