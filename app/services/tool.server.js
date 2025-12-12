@@ -30,6 +30,22 @@ export function createToolService() {
       for (const block of blocks) {
         if (!block) continue;
 
+        // Some MCP servers return structured blocks like:
+        // { type: "json", json: {...} } or { type: "resource", resource: {...} }
+        if (typeof block === 'object' && !Array.isArray(block)) {
+          if (block.json && typeof block.json === 'object') return block.json;
+          if (block.data && typeof block.data === 'object') return block.data;
+          if (block.resource) {
+            if (typeof block.resource === 'object') return block.resource;
+            if (typeof block.resource === 'string') {
+              const txt = block.resource.trim();
+              if (txt) {
+                try { return JSON.parse(txt); } catch { /* ignore */ }
+              }
+            }
+          }
+        }
+
         // Common MCP text block: { type: "text", text: "..." }
         if (typeof block === 'object' && typeof block.text === 'string') {
           const txt = block.text.trim();
