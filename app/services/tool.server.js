@@ -232,19 +232,19 @@ export function createToolService() {
       undefined;
 
     const handle =
-      (typeof product.handle === 'string' && product.handle) ? product.handle :
-      (typeof product.product_handle === 'string' && product.product_handle) ? product.product_handle :
-      (typeof product.productHandle === 'string' && product.productHandle) ? product.productHandle :
-      deepFindFirstString(product, ['handle', 'product_handle', 'productHandle']) :
+      ((typeof product.handle === 'string' && product.handle) ? product.handle : undefined) ||
+      ((typeof product.product_handle === 'string' && product.product_handle) ? product.product_handle : undefined) ||
+      ((typeof product.productHandle === 'string' && product.productHandle) ? product.productHandle : undefined) ||
+      deepFindFirstString(product, ['handle', 'product_handle', 'productHandle']) ||
       undefined;
 
     const url =
-      (typeof product.url === 'string' && product.url) ? product.url :
-      (typeof product.product_url === 'string' && product.product_url) ? product.product_url :
-      (typeof product.productUrl === 'string' && product.productUrl) ? product.productUrl :
-      (typeof product.online_store_url === 'string' && product.online_store_url) ? product.online_store_url :
-      (typeof product.onlineStoreUrl === 'string' && product.onlineStoreUrl) ? product.onlineStoreUrl :
-      deepFindFirstString(product, ['url', 'product_url', 'productUrl', 'online_store_url', 'onlineStoreUrl', 'online_store_preview_url', 'onlineStorePreviewUrl']) :
+      ((typeof product.url === 'string' && product.url) ? product.url : undefined) ||
+      ((typeof product.product_url === 'string' && product.product_url) ? product.product_url : undefined) ||
+      ((typeof product.productUrl === 'string' && product.productUrl) ? product.productUrl : undefined) ||
+      ((typeof product.online_store_url === 'string' && product.online_store_url) ? product.online_store_url : undefined) ||
+      ((typeof product.onlineStoreUrl === 'string' && product.onlineStoreUrl) ? product.onlineStoreUrl : undefined) ||
+      deepFindFirstString(product, ['url', 'product_url', 'productUrl', 'online_store_url', 'onlineStoreUrl', 'online_store_preview_url', 'onlineStorePreviewUrl']) ||
       (handle ? `/products/${handle}` : '');
 
     return {
