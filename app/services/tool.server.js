@@ -177,13 +177,27 @@ export function createToolService() {
       (firstVariant && typeof firstVariant.id === 'number' ? String(firstVariant.id) : null) ||
       undefined;
 
+    const handle =
+      (typeof product.handle === 'string' && product.handle) ? product.handle :
+      (typeof product.product_handle === 'string' && product.product_handle) ? product.product_handle :
+      (typeof product.productHandle === 'string' && product.productHandle) ? product.productHandle :
+      undefined;
+
+    const url =
+      (typeof product.url === 'string' && product.url) ? product.url :
+      (typeof product.product_url === 'string' && product.product_url) ? product.product_url :
+      (typeof product.productUrl === 'string' && product.productUrl) ? product.productUrl :
+      (typeof product.online_store_url === 'string' && product.online_store_url) ? product.online_store_url :
+      (typeof product.onlineStoreUrl === 'string' && product.onlineStoreUrl) ? product.onlineStoreUrl :
+      (handle ? `/products/${handle}` : '');
+
     return {
       id: product.product_id || `product-${Math.random().toString(36).substring(7)}`,
       title: product.title || 'Product',
       price: price,
       image_url: product.image_url || '',
       description: product.description || '',
-      url: product.url || '',
+      url,
       variant_id: variantId,
     };
   };
