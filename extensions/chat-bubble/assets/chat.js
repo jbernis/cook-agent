@@ -333,13 +333,27 @@
           }
 
           // If the user picks "the 2nd one" from the last product results, render that product card locally.
-          const selectionIndex = ShopAIChat.Selection
+          const selection = ShopAIChat.Selection
             ? ShopAIChat.Selection.parseSelectedIndex(userMessage, ShopAIChat.state.lastProductResults?.length || 0)
             : null;
 
-          if (selectionIndex !== null && selectionIndex !== undefined) {
-            debugLog('Product selection detected', { userMessage, selectionIndex });
-            await ShopAIChat.Selection.handleSelection(selectionIndex, messagesContainer);
+          if (selection && selection.kind === 'index') {
+            debugLog('Product selection detected', { userMessage, selectionIndex: selection.index });
+            await ShopAIChat.Selection.handleSelection(selection.index, messagesContainer);
+            return;
+          }
+
+          if (selection && selection.kind === 'out_of_range') {
+            ShopAIChat.UI.removeTypingIndicator();
+            const msgTemplate = t(
+              'productSelectionOutOfRangeDynamic',
+              "I only showed {{count}} options. Please pick 1–{{count}}, or search again for more."
+            );
+            ShopAIChat.Message.add(
+              template(msgTemplate, { count: String(selection.max) }),
+              'assistant',
+              messagesContainer
+            );
             return;
           }
 
@@ -462,11 +476,16 @@
      */
     Selection: {
       /**
-       * Parse a user message like "the second one", "2", "deuxième", "2e", etc. into a 0-based index.
-       * Returns null when not a selection.
+       * Parse a user message like "the second one", "2", "deuxième", "2e", etc.
+       * into either an in-range selection or an out-of-range selection.
+       *
+       * Returns:
+       * - null (not a selection)
+       * - { kind: 'index', index: number }
+       * - { kind: 'out_of_range', requested: number, max: number }
        * @param {string} message
        * @param {number} max
-       * @returns {number|null}
+       * @returns {object|null}
        */
       parseSelectedIndex: function(message, max) {
         if (typeof message !== 'string') return null;
@@ -480,7 +499,8 @@
         // Numeric-only selections like "2"
         if (/^\d+$/.test(m)) {
           const n = Number(m);
-          if (n >= 1 && n <= max) return n - 1;
+          if (n >= 1 && n <= max) return { kind: 'index', index: n - 1 };
+          if (n >= 1) return { kind: 'out_of_range', requested: n, max };
           return null;
         }
 
@@ -488,7 +508,8 @@
         const numericMatch = m.match(/\b(?:#|n°|no|num(?:ero|éro)?|number)\s*(\d+)\b/);
         if (numericMatch && numericMatch[1]) {
           const n = Number(numericMatch[1]);
-          if (n >= 1 && n <= max) return n - 1;
+          if (n >= 1 && n <= max) return { kind: 'index', index: n - 1 };
+          if (n >= 1) return { kind: 'out_of_range', requested: n, max };
         }
 
         // Ordinal words (EN/FR)
@@ -534,14 +555,15 @@
         for (const token of tokens) {
           if (Object.prototype.hasOwnProperty.call(wordToIndex, token)) {
             const idx = wordToIndex[token];
-            if (idx >= 0 && idx < max) return idx;
+            if (idx >= 0 && idx < max) return { kind: 'index', index: idx };
+            if (idx >= 0) return { kind: 'out_of_range', requested: idx + 1, max };
             return null;
           }
         }
 
         // "last"/"final"/"dernier/derniere" selections
         if (tokens.includes('last') || tokens.includes('final') || tokens.includes('dernier') || tokens.includes('derniere')) {
-          return max - 1;
+          return { kind: 'index', index: max - 1 };
         }
 
         return null;

@@ -26,7 +26,7 @@ export const AppConfig = {
   tools: {
     productSearchName: "search_shop_catalog",
     productDetailsName: "get_product_details",
-    maxProductsToDisplay: 3
+    maxProductsToDisplay: 5
   }
 };
 

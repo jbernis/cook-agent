@@ -16,6 +16,7 @@
     "productNoneFound": "Aucun produit trouvé",
     "productSelectionMessage": "Voici **{{title}}** — cliquez sur **Ajouter au panier** sur la carte produit pour l’ajouter à votre panier.",
     "productSelectionOutOfRange": "Je ne retrouve pas cet article dans la liste. Choisissez 1, 2 ou 3.",
+    "productSelectionOutOfRangeDynamic": "Je n’ai affiché que {{count}} options. Choisissez 1–{{count}}, ou relancez une recherche pour en voir plus.",
     "addToCart": "Ajouter au panier",
     "addToCartPrompt": "Ajoute {{title}} à mon panier",
     "addingToCart": "Ajout…",
