@@ -121,6 +121,7 @@ async function handleChatSession({
 }) {
   // Tools we intentionally hide/disable. (We prefer Online Store cart via /cart.js + /cart/add.js.)
   const DISABLED_MCP_TOOLS = new Set(["update_cart", "get_cart"]);
+  const CATALOG_SEARCH_TOOL = AppConfig.tools.productSearchName;
 
   // Initialize services
   const claudeService = createClaudeService();
@@ -183,6 +184,55 @@ async function handleChatSession({
         content
       };
     });
+
+    /**
+     * Auto-run catalog search so product cards show up even if the model doesn't call tools.
+     * This is especially important for follow-ups like "à dessert" after a user said
+     * "je cherche des assiettes".
+     */
+    const autoSearchCatalogIfNeeded = async () => {
+      try {
+        if (!Array.isArray(mcpClient.tools) || mcpClient.tools.length === 0) return;
+        if (!mcpClient.tools.some(t => t?.name === CATALOG_SEARCH_TOOL)) return;
+
+        const raw = (userMessage || '').trim();
+        if (!raw) return;
+
+        // Skip obvious non-search inputs
+        if (/^\d+$/.test(raw)) return; // ordinal selection handled client-side
+
+        const lower = raw.toLowerCase();
+        const looksLikeSearch =
+          /\b(cherche|recherche|trouve|montre|montrez|voir|besoin|voudrais|aimerais)\b/i.test(lower) ||
+          /\b(assiette|assiettes|casserole|casseroles|poele|poêles|couteau|couteaux|verre|verres)\b/i.test(lower);
+
+        const isShortRefinement = raw.length <= 30 && /\b(dessert|inox|petite|petit|moyenne|moyen|grande|grand|plate|creuse)\b/i.test(lower);
+
+        if (!looksLikeSearch && !isShortRefinement) return;
+
+        const previousUserQuery = getPreviousUserTextMessage(conversationHistory);
+        const query = (isShortRefinement && previousUserQuery)
+          ? `${previousUserQuery} ${raw}`
+          : raw;
+
+        console.log(`Auto catalog search: ${query}`);
+        const toolUseResponse = await mcpClient.callTool(CATALOG_SEARCH_TOOL, {
+          query,
+          context: `Customer is searching for products. Use the query to find relevant items.`,
+        });
+
+        if (toolUseResponse?.error) return;
+
+        const products = toolService.processProductSearchResult(toolUseResponse);
+        if (products && products.length > 0) {
+          productsToDisplay.push(...products);
+        }
+      } catch (e) {
+        console.warn('Auto catalog search failed:', e?.message || e);
+      }
+    };
+
+    await autoSearchCatalogIfNeeded();
 
     // Execute the conversation stream
     let finalMessage = { role: 'user', content: userMessage };
@@ -319,6 +369,18 @@ async function handleChatSession({
     // The streaming handler takes care of error handling
     throw error;
   }
+}
+
+function getPreviousUserTextMessage(conversationHistory) {
+  if (!Array.isArray(conversationHistory) || conversationHistory.length < 2) return null;
+
+  // Walk backwards, skipping the most recent message (current user input is already included)
+  for (let i = conversationHistory.length - 2; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if (msg?.role !== 'user') continue;
+    if (typeof msg?.content === 'string' && msg.content.trim().length > 0) return msg.content.trim();
+  }
+  return null;
 }
 
 /**
