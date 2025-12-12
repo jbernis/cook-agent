@@ -275,6 +275,12 @@
         ShopAIChat.UI.showTypingIndicator();
 
         try {
+          // If the user is asking about their cart, answer locally using Online Store cart (/cart.js)
+          if (ShopAIChat.Cart && ShopAIChat.Cart.isCartQuery(userMessage)) {
+            await ShopAIChat.Cart.handleCartQuery(messagesContainer);
+            return;
+          }
+
           ShopAIChat.API.streamResponse(userMessage, conversationId, messagesContainer);
         } catch (error) {
           console.error('Error communicating with Claude API:', error);
@@ -902,6 +908,73 @@
       },
 
       /**
+       * Fetch the current Online Store cart JSON.
+       * @returns {Promise<Object>}
+       */
+      _fetchOnlineStoreCart: async function() {
+        const response = await fetch('/cart.js', {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          credentials: 'same-origin',
+        });
+
+        if (!response.ok) throw new Error(`Cart fetch failed: ${response.status}`);
+        return await response.json();
+      },
+
+      /**
+       * Best-effort update of common cart count bubbles across themes.
+       * This won't cover every custom theme, but works for common patterns (ex: Dawn).
+       * @param {number} itemCount
+       */
+      _updateCartCountUI: function(itemCount) {
+        const count = (typeof itemCount === 'number' && Number.isFinite(itemCount)) ? itemCount : 0;
+
+        const countSelectors = [
+          '[data-cart-count]',
+          '#cart-icon-bubble [data-cart-count]',
+          '#cart-icon-bubble .cart-count-bubble span',
+          '.cart-count-bubble span',
+          'a[href="/cart"] .cart-count-bubble span',
+        ];
+
+        const nodes = new Set();
+        countSelectors.forEach((selector) => {
+          document.querySelectorAll(selector).forEach((el) => nodes.add(el));
+        });
+
+        nodes.forEach((el) => {
+          // Some themes store the number in attributes; keep it simple and update text.
+          if (el && typeof el.textContent === 'string') {
+            el.textContent = String(count);
+          }
+
+          // If this element is inside a bubble, toggle visibility when empty.
+          const bubble = el?.closest?.('.cart-count-bubble');
+          if (bubble) {
+            if (count > 0) {
+              bubble.removeAttribute('hidden');
+              bubble.style.display = '';
+            } else {
+              bubble.setAttribute('hidden', 'hidden');
+            }
+          }
+        });
+      },
+
+      /**
+       * Emit an event so themes can hook into cart changes (drawer refresh, etc.).
+       * @param {Object} cart
+       */
+      _emitCartUpdatedEvent: function(cart) {
+        try {
+          document.dispatchEvent(new CustomEvent('shop-ai:cart-updated', { detail: cart }));
+        } catch {
+          // ignore
+        }
+      },
+
+      /**
        * Create a product card element
        * @param {Object} product - Product data
        * @returns {HTMLElement} Product card element
@@ -997,6 +1070,17 @@
                   messagesContainer
                 );
               }
+
+              // Best-effort: refresh cart count bubble and emit an event for themes to hook into.
+              ShopAIChat.Product._fetchOnlineStoreCart()
+                .then((cart) => {
+                  ShopAIChat.Product._updateCartCountUI(cart?.item_count);
+                  ShopAIChat.Product._emitCartUpdatedEvent(cart);
+                })
+                .catch((error) => {
+                  console.warn('Unable to refresh cart UI after add:', error);
+                });
+
               // Reset button label after a short delay
               setTimeout(() => {
                 button.disabled = false;
@@ -1021,6 +1105,98 @@
         card.appendChild(info);
 
         return card;
+      }
+    },
+
+    /**
+     * Online Store cart helpers (Ajax Cart API)
+     */
+    Cart: {
+      /**
+       * Very small intent detector for "show my cart" style questions.
+       * @param {string} message
+       * @returns {boolean}
+       */
+      isCartQuery: function(message) {
+        if (typeof message !== 'string') return false;
+        const m = message.trim().toLowerCase();
+        if (!m) return false;
+
+        // English + French common phrases
+        if (m === 'cart' || m === 'my cart' || m === 'panier' || m === 'mon panier') return true;
+        if (m.includes('what is in my cart') || m.includes("what's in my cart") || m.includes('show my cart')) return true;
+        if (m.includes('what is in my basket') || m.includes("what's in my basket") || m.includes('show my basket')) return true;
+        if (m.includes('what is in my panier') || m.includes('voir mon panier') || m.includes('contenu de mon panier')) return true;
+
+        // Looser match: mentions cart/panier + "what/see/show"
+        const hasCartWord = /\b(cart|basket|panier)\b/i.test(m);
+        const hasQueryVerb = /\b(what|show|see|list|display|voir|affiche|afficher|montre|montrer|liste)\b/i.test(m);
+        return hasCartWord && hasQueryVerb;
+      },
+
+      /**
+       * Format cents into a readable amount (best-effort).
+       * @param {number} cents
+       * @param {string|undefined} currency
+       * @returns {string}
+       */
+      formatMoney: function(cents, currency) {
+        if (typeof cents !== 'number' || !Number.isFinite(cents)) return '';
+        const amount = (cents / 100);
+        const curr = (typeof currency === 'string' && currency) ? currency : '';
+        return curr ? `${curr} ${amount.toFixed(2)}` : amount.toFixed(2);
+      },
+
+      /**
+       * Render a cart summary message (markdown-friendly).
+       * @param {Object} cart
+       * @returns {string}
+       */
+      renderSummary: function(cart) {
+        const itemCount = (typeof cart?.item_count === 'number') ? cart.item_count : 0;
+        const currency = cart?.currency;
+        const totalPrice = (typeof cart?.total_price === 'number') ? cart.total_price : 0;
+
+        if (!cart || itemCount <= 0) {
+          const empty = t('cartEmpty', 'Your cart is currently empty.');
+          return `${empty}\n\n[${t('viewCartLinkText', 'View your cart')}](/cart)`;
+        }
+
+        const header = t('cartSummaryHeader', "Here's what's currently in your cart:");
+        const lines = Array.isArray(cart.items) ? cart.items : [];
+
+        const renderedLines = lines.map((item) => {
+          const title = item?.product_title || item?.title || 'Item';
+          const variantTitle = item?.variant_title && item.variant_title !== 'Default Title' ? ` (${item.variant_title})` : '';
+          const qty = item?.quantity || 1;
+          return `- ${title}${variantTitle} × ${qty}`;
+        }).join('\n');
+
+        const subtotalLabel = t('cartSubtotalLabel', 'Subtotal');
+        const subtotal = this.formatMoney(totalPrice, currency);
+        const itemsLabel = t('cartItemsCountLabel', 'Items');
+
+        return `${header}\n${renderedLines}\n\n${itemsLabel}: ${itemCount}\n${subtotalLabel}: ${subtotal}\n\n[${t('viewCartLinkText', 'View your cart')}](/cart)`;
+      },
+
+      /**
+       * Handle a cart query locally (no MCP / no LLM).
+       * @param {HTMLElement} messagesContainer
+       */
+      handleCartQuery: async function(messagesContainer) {
+        try {
+          const cart = await ShopAIChat.Product._fetchOnlineStoreCart();
+          ShopAIChat.UI.removeTypingIndicator();
+          ShopAIChat.Message.add(this.renderSummary(cart), 'assistant', messagesContainer);
+        } catch (error) {
+          console.error('Error fetching Online Store cart:', error);
+          ShopAIChat.UI.removeTypingIndicator();
+          ShopAIChat.Message.add(
+            t('cartFetchFailed', "Sorry, I couldn't load your cart right now. Please try again."),
+            'assistant',
+            messagesContainer
+          );
+        }
       }
     },
 

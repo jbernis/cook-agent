@@ -20,6 +20,12 @@
     "addedToCart": "Ajouté",
     "addedToCartMessage": "**{{title}}** a été ajouté à votre panier. Vous pouvez [cliquer ici pour voir votre panier](/cart).",
     "addToCartFailed": "Désolé, je n’ai pas pu ajouter cet article à votre panier. Veuillez réessayer.",
+    "cartSummaryHeader": "Voici ce qu’il y a actuellement dans votre panier :",
+    "cartEmpty": "Votre panier est actuellement vide.",
+    "viewCartLinkText": "Voir votre panier",
+    "cartItemsCountLabel": "Articles",
+    "cartSubtotalLabel": "Sous-total",
+    "cartFetchFailed": "Désolé, je n’ai pas pu charger votre panier pour le moment. Veuillez réessayer.",
     "schema": {
       "blockName": "Assistant IA (chat)",
       "settings": {

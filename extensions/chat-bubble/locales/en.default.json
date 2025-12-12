@@ -20,6 +20,12 @@
     "addedToCart": "Added",
     "addedToCartMessage": "Added **{{title}}** to your cart. You can [click here to view your cart](/cart).",
     "addToCartFailed": "Sorry, I couldn't add that to your cart. Please try again.",
+    "cartSummaryHeader": "Here's what's currently in your cart:",
+    "cartEmpty": "Your cart is currently empty.",
+    "viewCartLinkText": "View your cart",
+    "cartItemsCountLabel": "Items",
+    "cartSubtotalLabel": "Subtotal",
+    "cartFetchFailed": "Sorry, I couldn't load your cart right now. Please try again.",
     "schema": {
       "blockName": "AI Chat Assistant",
       "settings": {
