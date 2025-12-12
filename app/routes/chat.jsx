@@ -226,7 +226,13 @@ async function handleChatSession({
             const toolUseId = content.id;
 
             if (DISABLED_MCP_TOOLS.has(toolName)) {
-              const msg = `Tool '${toolName}' is disabled in this app. Please use the Online Store cart instead.`;
+              const msg = [
+                `The tool \`${toolName}\` is disabled in this app.`,
+                ``,
+                `This store uses the **Online Store cart** as the source of truth:`,
+                `- To **add items to cart**: use the storefront **Add to Cart** button (or add from the product page).`,
+                `- To **view your cart**: go to \`/cart\``,
+              ].join('\n');
 
               stream.sendMessage({
                 type: 'tool_use',
