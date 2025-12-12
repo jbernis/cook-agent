@@ -187,6 +187,62 @@ async function handleChatSession({
       };
     });
 
+    const enrichProductsWithLinks = async (products) => {
+      try {
+        if (!Array.isArray(products) || products.length === 0) return;
+
+        // 1) Try MCP product details tool first (best-effort, no extra Shopify sessions needed)
+        if (Array.isArray(mcpClient.tools) &&
+            mcpClient.tools.some(t => t?.name === PRODUCT_DETAILS_TOOL)) {
+          for (const p of products) {
+            if (!p) continue;
+            if ((p.url && p.url !== '') || (p.handle && p.handle !== '')) continue;
+            try {
+              const detailsResponse = await mcpClient.callTool(PRODUCT_DETAILS_TOOL, { product_id: p.id });
+              if (!detailsResponse?.error) {
+                const detailsProducts = toolService.processProductDetailsResult(detailsResponse);
+                const details = Array.isArray(detailsProducts) ? detailsProducts[0] : null;
+                if (details?.url) p.url = details.url;
+                if (details?.handle) p.handle = details.handle;
+              }
+            } catch (e) {
+              console.warn('Product details enrichment failed:', e?.message || e);
+            }
+          }
+        }
+
+        // 2) Fallback: Storefront API offline context (if available)
+        const shop = getShopFromOrigin(shopDomain);
+        if (shop) {
+          for (const p of products) {
+            if (!p) continue;
+            if ((p.url && p.url !== '') || (p.handle && p.handle !== '')) continue;
+            try {
+              const resolved = await resolveProductLinkViaStorefront(shop, p.id);
+              const handle = resolved?.handle || null;
+              const url = resolved?.url || null;
+
+              if (handle) p.handle = handle;
+              if (url) p.url = url;
+              if (!p.url && p.handle) p.url = `/products/${p.handle}`;
+            } catch (e) {
+              console.warn('Storefront enrichment failed:', e?.message || e);
+            }
+          }
+        }
+
+        // Log a sample for debugging
+        const sample = products.find(p => p && (p.url || p.handle));
+        if (sample) {
+          console.log('Product link enrichment sample:', { id: sample.id, url: sample.url, handle: sample.handle });
+        } else {
+          console.log('Product link enrichment: no url/handle could be resolved');
+        }
+      } catch (e) {
+        console.warn('Product link enrichment failed:', e?.message || e);
+      }
+    };
+
     /**
      * Auto-run catalog search so product cards show up even if the model doesn't call tools.
      * This is especially important for follow-ups like "à dessert" after a user said
@@ -227,54 +283,7 @@ async function handleChatSession({
 
         const products = toolService.processProductSearchResult(toolUseResponse);
         if (products && products.length > 0) {
-          // Best-effort enrichment: fetch product details to get a handle/url for clickable product cards.
-          if (Array.isArray(mcpClient.tools) &&
-              mcpClient.tools.some(t => t?.name === PRODUCT_DETAILS_TOOL)) {
-            for (const p of products) {
-              if (p && (!p.url || p.url === '')) {
-                try {
-                  const detailsResponse = await mcpClient.callTool(PRODUCT_DETAILS_TOOL, { product_id: p.id });
-                  if (!detailsResponse?.error) {
-                    const detailsProducts = toolService.processProductDetailsResult(detailsResponse);
-                    const details = Array.isArray(detailsProducts) ? detailsProducts[0] : null;
-                    if (details?.url) p.url = details.url;
-                    if (details?.handle) p.handle = details.handle;
-                    if (details?.url || details?.handle) {
-                      console.log(`Enriched product ${p.id}:`, { url: details?.url, handle: details?.handle });
-                    }
-                  }
-                } catch (e) {
-                  console.warn('Product details enrichment failed:', e?.message || e);
-                }
-              }
-            }
-          }
-
-          // Fallback enrichment via Storefront API offline context (more reliable for handle/url without extra Admin scopes).
-          const shop = getShopFromOrigin(shopDomain);
-          if (shop) {
-            console.log(`Storefront enrichment attempt: ${products.length} product(s)`, { shop });
-            for (const p of products) {
-              if (!p) continue;
-              if ((p.url && p.url !== '') || (p.handle && p.handle !== '')) continue;
-              try {
-                const resolved = await resolveProductLinkViaStorefront(shop, p.id);
-                const handle = resolved?.handle || null;
-                const url = resolved?.url || null;
-
-                if (handle) p.handle = handle;
-                if (url) p.url = url;
-                if (!p.url && p.handle) p.url = `/products/${p.handle}`;
-
-                if (p.url || p.handle) {
-                  console.log(`Storefront-enriched product ${p.id}:`, { url: p.url, handle: p.handle });
-                }
-              } catch (e) {
-                console.warn('Storefront enrichment failed:', e?.message || e);
-              }
-            }
-          }
-
+          await enrichProductsWithLinks(products);
           productsToDisplay.push(...products);
         }
       } catch (e) {
@@ -378,6 +387,7 @@ async function handleChatSession({
                 conversationId
               );
             } else {
+              const beforeLen = productsToDisplay.length;
               await toolService.handleToolSuccess(
                 toolUseResponse,
                 toolName,
@@ -386,6 +396,12 @@ async function handleChatSession({
                 productsToDisplay,
                 conversationId
               );
+
+              // If the tool produced product cards, enrich them with url/handle so images/titles are clickable.
+              if (toolName === AppConfig.tools.productSearchName || toolName === AppConfig.tools.productDetailsName) {
+                const newProducts = productsToDisplay.slice(beforeLen);
+                await enrichProductsWithLinks(newProducts);
+              }
             }
 
             // Signal new message to client
