@@ -8,6 +8,25 @@
   'use strict';
 
   const I18N = (window.shopChatConfig && window.shopChatConfig.i18n) ? window.shopChatConfig.i18n : {};
+  const DEBUG = !!(window.shopChatConfig && window.shopChatConfig.debug);
+
+  function debugLog(...args) {
+    if (!DEBUG) return;
+    // eslint-disable-next-line no-console
+    console.log('[ShopAIChat]', ...args);
+  }
+
+  function debugWarn(...args) {
+    if (!DEBUG) return;
+    // eslint-disable-next-line no-console
+    console.warn('[ShopAIChat]', ...args);
+  }
+
+  function debugError(...args) {
+    if (!DEBUG) return;
+    // eslint-disable-next-line no-console
+    console.error('[ShopAIChat]', ...args);
+  }
 
   /**
    * Simple i18n helper for user-visible strings.
@@ -277,13 +296,15 @@
         try {
           // If the user is asking about their cart, answer locally using Online Store cart (/cart.js)
           if (ShopAIChat.Cart && ShopAIChat.Cart.isCartQuery(userMessage)) {
+            debugLog('Cart query detected; answering via /cart.js', { userMessage });
             await ShopAIChat.Cart.handleCartQuery(messagesContainer);
             return;
           }
 
+          debugLog('Sending message to backend', { userMessage, conversationId });
           ShopAIChat.API.streamResponse(userMessage, conversationId, messagesContainer);
         } catch (error) {
-          console.error('Error communicating with Claude API:', error);
+          debugError('Error communicating with Claude API:', error);
           ShopAIChat.UI.removeTypingIndicator();
           this.add(t('errorGeneric', "Sorry, I couldn't process your request at the moment. Please try again later."), 'assistant', messagesContainer);
         }
@@ -1078,7 +1099,7 @@
                   ShopAIChat.Product._emitCartUpdatedEvent(cart);
                 })
                 .catch((error) => {
-                  console.warn('Unable to refresh cart UI after add:', error);
+                  debugWarn('Unable to refresh cart UI after add:', error);
                 });
 
               // Reset button label after a short delay
@@ -1088,7 +1109,7 @@
               }, 1500);
             })
             .catch((error) => {
-              console.error('Error adding to Online Store cart:', error);
+              debugError('Error adding to Online Store cart:', error);
               button.disabled = false;
               button.textContent = previousText;
               if (messagesContainer) {
@@ -1185,11 +1206,13 @@
        */
       handleCartQuery: async function(messagesContainer) {
         try {
+          debugLog('Fetching Online Store cart', { url: '/cart.js' });
           const cart = await ShopAIChat.Product._fetchOnlineStoreCart();
+          debugLog('Fetched Online Store cart', { item_count: cart?.item_count, currency: cart?.currency });
           ShopAIChat.UI.removeTypingIndicator();
           ShopAIChat.Message.add(this.renderSummary(cart), 'assistant', messagesContainer);
         } catch (error) {
-          console.error('Error fetching Online Store cart:', error);
+          debugError('Error fetching Online Store cart:', error);
           ShopAIChat.UI.removeTypingIndicator();
           ShopAIChat.Message.add(
             t('cartFetchFailed', "Sorry, I couldn't load your cart right now. Please try again."),

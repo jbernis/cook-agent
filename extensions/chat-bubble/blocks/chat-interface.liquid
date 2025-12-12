@@ -42,6 +42,7 @@
   window.shopChatConfig = {
     promptType: {{ block.settings.system_prompt | json }},
     welcomeMessage: {{ welcome_message | json }},
+    debug: {{ block.settings.debug_logging | json }},
     i18n: {
       welcomeDefault: {{ 'chat.welcomeDefault' | t | json }},
       loadingHistory: {{ 'chat.loadingHistory' | t | json }},
@@ -102,6 +103,12 @@
         }
       ],
       "default": "standardAssistant"
+    },
+    {
+      "type": "checkbox",
+      "id": "debug_logging",
+      "label": "t:chat.schema.settings.debugLogging",
+      "default": false
     }
   ]
 }

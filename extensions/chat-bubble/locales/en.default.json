@@ -32,6 +32,7 @@
         "chatBubbleColor": "Chat bubble color",
         "welcomeMessage": "Welcome message",
         "systemPrompt": "System prompt",
+        "debugLogging": "Enable debug logging",
         "standardAssistant": "Standard assistant",
         "enthusiasticAssistant": "Enthusiastic assistant"
       }

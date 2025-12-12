@@ -32,6 +32,7 @@
         "chatBubbleColor": "Couleur de la bulle de chat",
         "welcomeMessage": "Message de bienvenue",
         "systemPrompt": "Invite système",
+        "debugLogging": "Activer les logs de debug",
         "standardAssistant": "Assistant standard",
         "enthusiasticAssistant": "Assistant enthousiaste"
       }
