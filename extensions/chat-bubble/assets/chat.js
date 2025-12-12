@@ -757,6 +757,23 @@
               }
             }
           }
+
+          // Flush any remaining buffered event when the stream closes (prevents dropping the last message).
+          if (buffer && buffer.trim().length > 0) {
+            const trailing = buffer.split('\n\n').filter(Boolean);
+            for (const line of trailing) {
+              const trimmed = line.trimStart();
+              if (trimmed.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(trimmed.slice(6));
+                  this.handleStreamEvent(data, currentMessageElement, messagesContainer, userMessage,
+                    (newElement) => { currentMessageElement = newElement; });
+                } catch (e) {
+                  console.error('Error parsing trailing event data:', e, line);
+                }
+              }
+            }
+          }
         } catch (error) {
           console.error('Error in streaming:', error);
           ShopAIChat.UI.removeTypingIndicator();
@@ -816,6 +833,7 @@
             break;
 
           case 'product_results':
+            debugLog('Received product_results', { count: Array.isArray(data.products) ? data.products.length : 0 });
             // Don't overwrite a multi-product list with a single-product widget (keeps ordinal selection reliable).
             if (Array.isArray(data.products) && data.products.length === 1 &&
                 Array.isArray(ShopAIChat.state.lastProductResults) && ShopAIChat.state.lastProductResults.length > 1) {
