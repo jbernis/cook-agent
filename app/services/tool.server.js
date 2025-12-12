@@ -35,8 +35,24 @@ export function createToolService() {
         if (typeof block === 'object' && !Array.isArray(block)) {
           if (block.json && typeof block.json === 'object') return block.json;
           if (block.data && typeof block.data === 'object') return block.data;
+          if (typeof block.text === 'string') {
+            const txt = block.text.trim();
+            if (txt) {
+              try { return JSON.parse(txt); } catch { /* ignore */ }
+            }
+          }
           if (block.resource) {
-            if (typeof block.resource === 'object') return block.resource;
+            if (typeof block.resource === 'object') {
+              if (typeof block.resource.text === 'string') {
+                const txt = block.resource.text.trim();
+                if (txt) {
+                  try { return JSON.parse(txt); } catch { /* ignore */ }
+                }
+              }
+              if (block.resource.data && typeof block.resource.data === 'object') return block.resource.data;
+              if (block.resource.json && typeof block.resource.json === 'object') return block.resource.json;
+              return block.resource;
+            }
             if (typeof block.resource === 'string') {
               const txt = block.resource.trim();
               if (txt) {

@@ -238,6 +238,9 @@ async function handleChatSession({
                     const details = Array.isArray(detailsProducts) ? detailsProducts[0] : null;
                     if (details?.url) p.url = details.url;
                     if (details?.handle) p.handle = details.handle;
+                    if (details?.url || details?.handle) {
+                      console.log(`Enriched product ${p.id}:`, { url: details?.url, handle: details?.handle });
+                    }
                   }
                 } catch (e) {
                   console.warn('Product details enrichment failed:', e?.message || e);
