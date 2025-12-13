@@ -8,6 +8,7 @@ import AppConfig from "../services/config.server";
 import { createSseStream } from "../services/streaming.server";
 import { createClaudeService } from "../services/claude.server";
 import { createToolService } from "../services/tool.server";
+import { createProductRequestWorkflow } from "../services/product-request-workflow.server";
 import { unauthenticated } from "../shopify.server";
 
 
@@ -291,7 +292,56 @@ async function handleChatSession({
       }
     };
 
-    await autoSearchCatalogIfNeeded();
+    /**
+     * REQUIRED: For product requests, run analysis first, then a 2-step search:
+     * 1) product name search
+     * 2) refine by adjectives ONLY within the prior results
+     *
+     * This must run before engaging the main model.
+     */
+    const autoAnalyzeAndSearchProductsIfNeeded = async () => {
+      try {
+        const raw = (userMessage || '').trim();
+        if (!raw) return false;
+
+        // Reuse the existing refinement heuristic to preserve UX ("à dessert" after "assiettes")
+        const previousUserQuery = getPreviousUserTextMessage(conversationHistory);
+        const lower = raw.toLowerCase();
+        const isShortRefinement = raw.length <= 30 && /\b(dessert|inox|petite|petit|moyenne|moyen|grande|grand|plate|creuse)\b/i.test(lower);
+        const textForAnalysis = (isShortRefinement && previousUserQuery)
+          ? `${previousUserQuery} ${raw}`
+          : raw;
+
+        const workflow = createProductRequestWorkflow({
+          mcpClient,
+          toolService,
+          productSearchToolName: CATALOG_SEARCH_TOOL,
+        });
+
+        const { analysis, products } = await workflow.run({ textForAnalysis });
+
+        // If analysis doesn't detect a product request, let the normal LLM flow proceed.
+        if (!Array.isArray(analysis) || analysis.length === 0) return false;
+
+        console.log("Product request analysis:", JSON.stringify(analysis));
+
+        if (Array.isArray(products) && products.length > 0) {
+          await enrichProductsWithLinks(products);
+          productsToDisplay.push(...products);
+        }
+
+        // We ran analysis before the main model. Return true even if search yielded no products.
+        return true;
+      } catch (e) {
+        console.warn('Auto product analysis/search failed:', e?.message || e);
+        return false;
+      }
+    };
+
+    const didRunProductWorkflow = await autoAnalyzeAndSearchProductsIfNeeded();
+    if (!didRunProductWorkflow) {
+      await autoSearchCatalogIfNeeded();
+    }
 
     // Execute the conversation stream
     let finalMessage = { role: 'user', content: userMessage };
