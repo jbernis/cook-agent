@@ -808,12 +808,28 @@ async function backfillProductsFromAssistantText({
     const listedTitles = extractListedProductTitlesFromAssistantText(assistantText);
     if (listedTitles.length === 0) return;
 
-    const currentMatched = filterProductsToMentionedInText(productsToDisplay, assistantText);
-    if (currentMatched.length >= listedTitles.length) return;
+    const isTitleCoveredByCurrentProducts = (wantedTitle) => {
+      const w = normalizeForTitleMatch(wantedTitle);
+      if (!w) return true;
+
+      for (const p of productsToDisplay) {
+        const pt = normalizeForTitleMatch(p?.title || '');
+        if (!pt) continue;
+        if (pt === w || pt.includes(w) || w.includes(pt)) return true;
+      }
+
+      return false;
+    };
+
+    // IMPORTANT: do NOT compare array lengths here (duplicates can cause false "complete" results).
+    // Only skip backfill when every unique listed title is already covered by current products.
+    const missingTitles = Array.from(new Set(listedTitles))
+      .filter((t) => !isTitleCoveredByCurrentProducts(t));
+    if (missingTitles.length === 0) return;
 
     // Resolve each missing title with a targeted catalog search
     const existingNormalized = new Set(productsToDisplay.map((p) => normalizeForTitleMatch(p?.title || '')).filter(Boolean));
-    const toFetch = listedTitles.filter((t) => {
+    const toFetch = missingTitles.filter((t) => {
       const key = normalizeForTitleMatch(t);
       return key && !existingNormalized.has(key);
     });
