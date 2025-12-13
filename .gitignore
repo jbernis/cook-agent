@@ -10,6 +10,9 @@ node_modules
 /prisma/dev.sqlite-journal
 database.sqlite
 
+# Local scripts/diagrams (not part of app runtime)
+/script/
+
 .env
 .env.*
 

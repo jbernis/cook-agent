@@ -198,11 +198,19 @@
 
         // Add global click handler for auth links
         document.addEventListener('click', function(event) {
-          if (event.target && event.target.classList.contains('shop-auth-trigger')) {
+          const target = event.target;
+          const authLink = target && target.closest ? target.closest('a.shop-auth-trigger') : null;
+          if (authLink) {
             event.preventDefault();
             if (window.shopAuthUrl) {
               ShopAIChat.Auth.openAuthPopup(window.shopAuthUrl);
             }
+          }
+
+          // Persist "open chat on next page" for product links rendered in chat text
+          const productLink = target && target.closest ? target.closest('a.shop-ai-product-link') : null;
+          if (productLink) {
+            try { sessionStorage.setItem(ShopAIChat.UI._OPEN_ON_NEXT_PAGE_KEY, '1'); } catch { /* ignore */ }
           }
         });
       },
@@ -676,6 +684,96 @@
      */
     Formatting: {
       /**
+       * If the assistant lists products as numbered items with a bold title but WITHOUT a link,
+       * rewrite the bold title into a markdown link using lastProductResults.
+       *
+       * Example:
+       *   1. **Couteau XYZ** - **89,30 €**
+       * becomes:
+       *   1. **[Couteau XYZ](/products/...)** - **89,30 €**
+       *
+       * @param {string} text
+       * @returns {string}
+       */
+      _rewriteNumberedBoldTitlesToLinks: function(text) {
+        try {
+          if (typeof text !== 'string' || !text) return text;
+
+          // Only attempt if we have product results to resolve against.
+          const products = Array.isArray(ShopAIChat.state.lastProductResults) ? ShopAIChat.state.lastProductResults : [];
+          if (products.length === 0) return text;
+
+          // Handle "bold number + title" patterns:
+          //   **1. Titre** - **prix**
+          // Turn into:
+          //   1. **[Titre](/products/...)** - **prix**
+          // (so it becomes a proper ordered list and clickable)
+          text = text.replace(
+            /^\s*\*\*(\d+)\s*[\.\)]\s*([^*]+)\*\*(.*)$/gm,
+            (match, n, title, rest) => {
+              const t = String(title || '').trim();
+              if (!t) return match;
+              // If it's already a link, leave it
+              if (t.includes('](') || t.includes('[') || t.includes(')')) return match;
+              const resolved = ShopAIChat.Product._getProductLinkFromLabel(t);
+              if (!resolved) return match;
+              return `${n}. **[${t}](${resolved})**${rest || ''}`;
+            }
+          );
+
+          // We target numbered list lines. Keep it conservative.
+          // Capture:
+          //  - leading number + dot
+          //  - a bold title (**...**) that does NOT already contain a markdown link
+          //  - rest of line unchanged
+          return text.replace(
+            /^(\s*\d+\s*[\.\)]\s+)\*\*([^*\[\]]+)\*\*(.*)$/gm,
+            (match, prefix, title, rest) => {
+              const t = String(title || '').trim();
+              if (!t) return match;
+
+              // If the bold already contains a link syntax, leave it
+              if (t.includes('](') || t.includes('[') || t.includes(')')) return match;
+
+              const resolved = ShopAIChat.Product._getProductLinkFromLabel(t);
+              if (!resolved) return match;
+
+              return `${prefix}**[${t}](${resolved})**${rest}`;
+            }
+          );
+        } catch {
+          return text;
+        }
+      },
+
+      /**
+       * Re-run markdown/link formatting on the most recent assistant messages.
+       * This is useful because product_results often arrives AFTER message_complete,
+       * and link rewriting (example.com / CDN image URLs -> real product page) relies on lastProductResults.
+       * @param {HTMLElement} messagesContainer
+       * @param {number} [maxMessages=3]
+       */
+      reformatRecentAssistantMessages: function(messagesContainer, maxMessages) {
+        try {
+          const max = (typeof maxMessages === 'number' && maxMessages > 0) ? Math.floor(maxMessages) : 3;
+          if (!messagesContainer) return;
+
+          const nodes = Array.from(messagesContainer.querySelectorAll('.shop-ai-message.assistant[data-raw-text]'));
+          if (nodes.length === 0) return;
+
+          const recent = nodes.slice(-max);
+          recent.forEach((el) => {
+            // Only reformat if we have raw text to re-render from (source of truth)
+            if (el && el.dataset && typeof el.dataset.rawText === 'string') {
+              ShopAIChat.Formatting.formatMessageContent(el);
+            }
+          });
+        } catch (e) {
+          debugWarn('Unable to reformat recent assistant messages', e);
+        }
+      },
+
+      /**
        * Format message content with markdown and links
        * @param {HTMLElement} element - The element to format
        */
@@ -687,9 +785,38 @@
         // Process the text with various Markdown features
         let processedText = rawText;
 
+        // If Claude provided a numbered list with bold product names but no links, rewrite them to links first.
+        processedText = this._rewriteNumberedBoldTitlesToLinks(processedText);
+
         // Process Markdown links
         const markdownLinkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
         processedText = processedText.replace(markdownLinkRegex, (match, text, url) => {
+          // LLMs sometimes emit placeholder links like example.com/product/<id>.
+          // Rewrite these to the real product page URL using our last product results list.
+          if (ShopAIChat.Product._isPlaceholderUrl(url)) {
+            const byId = ShopAIChat.Product._getProductLinkFromUrlProductId(url);
+            const byLabel = ShopAIChat.Product._getProductLinkFromLabel(text);
+            const resolved = byId || byLabel;
+            if (resolved) return '<a href="' + resolved + '" class="shop-ai-product-link">' + text + '</a>';
+            return text;
+          }
+
+          // If the model linked to an image/CDN URL by mistake (common when it uses image_url),
+          // try to rewrite to the product page URL based on the label (usually product title).
+          if (ShopAIChat.Product._isLikelyImageUrl(url)) {
+            const resolved = ShopAIChat.Product._getProductLinkFromLabel(text);
+            if (resolved) {
+              return '<a href="' + resolved + '" class="shop-ai-product-link">' + text + '</a>';
+            }
+            // If we can't resolve it, don't create a broken link
+            return text;
+          }
+
+          // If it's a product page URL, open in the same tab and persist "open chat" on navigation.
+          if (ShopAIChat.Product._isLikelyProductPageUrl(url)) {
+            return '<a href="' + url + '" class="shop-ai-product-link">' + text + '</a>';
+          }
+
           // Check if it's an auth URL
           if (url.includes('shopify.com/authentication') &&
              (url.includes('oauth/authorize') || url.includes('authentication'))) {
@@ -930,6 +1057,9 @@
             } else {
               ShopAIChat.UI.displayProductResults(data.products);
             }
+            // Now that lastProductResults is available (or updated), re-run formatting so placeholder links
+            // (example.com/product/<id> or CDN images) can be rewritten to real product page links.
+            ShopAIChat.Formatting.reformatRecentAssistantMessages(messagesContainer, 4);
             break;
 
           case 'tool_use':
@@ -1191,6 +1321,119 @@
       },
 
       /**
+       * Best-effort checks to avoid using image/CDN links as product page links.
+       * @param {string} url
+       * @returns {boolean}
+       */
+      _isLikelyImageUrl: function(url) {
+        if (typeof url !== 'string') return false;
+        const u = url.trim().toLowerCase();
+        if (!u) return false;
+        return /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(u) || /cdn\.shopify\.com/i.test(u);
+      },
+
+      /**
+       * Accept relative or absolute product page URLs.
+       * @param {string} url
+       * @returns {boolean}
+       */
+      _isLikelyProductPageUrl: function(url) {
+        if (typeof url !== 'string') return false;
+        const u = url.trim();
+        if (!u) return false;
+        if (u.startsWith('/products/')) return true;
+        return /\/products\//i.test(u);
+      },
+
+      /**
+       * Detect obvious placeholder URLs generated by LLMs (ex: example.com).
+       * @param {string} url
+       * @returns {boolean}
+       */
+      _isPlaceholderUrl: function(url) {
+        if (typeof url !== 'string') return false;
+        const u = url.trim().toLowerCase();
+        if (!u) return false;
+        return /(^|\/\/)(www\.)?example\.com(\/|$)/i.test(u);
+      },
+
+      /**
+       * Compute a safe product page link for a product object.
+       * Prefers product.url when it looks like a product page (not an image),
+       * otherwise falls back to /products/<handle>.
+       * @param {Object} product
+       * @returns {string|null}
+       */
+      _getProductLink: function(product) {
+        try {
+          const rawUrl = (product && typeof product.url === 'string') ? product.url.trim() : '';
+          if (rawUrl && this._isLikelyProductPageUrl(rawUrl) && !this._isLikelyImageUrl(rawUrl)) return rawUrl;
+
+          const handle = (product && typeof product.handle === 'string') ? product.handle.trim() : '';
+          if (handle) return `/products/${handle}`;
+          return null;
+        } catch {
+          return null;
+        }
+      },
+
+      /**
+       * Resolve a product page URL from a markdown link label (usually product title).
+       * Uses the most recent product results already shown in the widget.
+       * @param {string} label
+       * @returns {string|null}
+       */
+      _getProductLinkFromLabel: function(label) {
+        try {
+          const needle = (typeof label === 'string') ? label.trim().toLowerCase() : '';
+          if (!needle) return null;
+
+          const products = Array.isArray(ShopAIChat.state.lastProductResults) ? ShopAIChat.state.lastProductResults : [];
+          if (products.length === 0) return null;
+
+          // Prefer exact title match
+          let match = products.find((p) => (p && typeof p.title === 'string') && p.title.trim().toLowerCase() === needle);
+          // Fallback: contained match (best-effort, conservative)
+          if (!match) {
+            match = products.find((p) => (p && typeof p.title === 'string') && p.title.trim().toLowerCase().includes(needle));
+          }
+
+          return match ? this._getProductLink(match) : null;
+        } catch {
+          return null;
+        }
+      },
+
+      /**
+       * Resolve a product page URL from a numeric product id embedded in a URL
+       * (ex: https://www.example.com/product/10064339042625).
+       * Matches against the last product results list (gid://shopify/Product/<id>).
+       * @param {string} url
+       * @returns {string|null}
+       */
+      _getProductLinkFromUrlProductId: function(url) {
+        try {
+          if (typeof url !== 'string') return null;
+          const u = url.trim();
+          const m = u.match(/\/product\/(\d+)\b/i);
+          if (!m || !m[1]) return null;
+          const idNum = m[1];
+
+          const products = Array.isArray(ShopAIChat.state.lastProductResults) ? ShopAIChat.state.lastProductResults : [];
+          if (products.length === 0) return null;
+
+          const match = products.find((p) => {
+            const pid = (p && typeof p.id === 'string') ? p.id : '';
+            return pid.includes(`/Product/${idNum}`) || pid.endsWith(String(idNum));
+          });
+
+          return match ? this._getProductLink(match) : null;
+        } catch {
+          return null;
+        }
+      },
+
+      /**
        * Add a variant to the Online Store cart using Shopify Ajax Cart API.
        * This uses the shopper's cart cookies automatically.
        * @param {number} variantId
@@ -1294,10 +1537,7 @@
         const card = document.createElement('div');
         card.classList.add('shop-ai-product-card');
 
-        const productLink =
-          (product && typeof product.url === 'string' && product.url.length > 0) ? product.url :
-          (product && typeof product.handle === 'string' && product.handle.length > 0) ? `/products/${product.handle}` :
-          null;
+        const productLink = ShopAIChat.Product._getProductLink(product);
 
         // Create image container
         const imageContainer = document.createElement('div');

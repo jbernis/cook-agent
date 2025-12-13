@@ -11,6 +11,19 @@ import { createToolService } from "../services/tool.server";
 import { createProductRequestWorkflow } from "../services/product-request-workflow.server";
 import { unauthenticated } from "../shopify.server";
 
+const PRODUCT_WORKFLOW_DEBUG =
+  process.env.PRODUCT_WORKFLOW_DEBUG === "1" ||
+  process.env.PRODUCT_WORKFLOW_DEBUG === "true";
+
+function productDebugLog(...args) {
+  if (!PRODUCT_WORKFLOW_DEBUG) return;
+  console.log("[product-workflow][chat-route]", ...args);
+}
+
+function productInfoLog(...args) {
+  console.log("[product-workflow][chat-route]", ...args);
+}
+
 
 /**
  * Rract Router loader function for handling GET requests
@@ -167,6 +180,7 @@ async function handleChatSession({
     // Prepare conversation state
     let conversationHistory = [];
     let productsToDisplay = [];
+    let lastAssistantText = '';
 
     // Save user message to the database
     await saveMessage(conversationId, 'user', userMessage);
@@ -312,6 +326,21 @@ async function handleChatSession({
           ? `${previousUserQuery} ${raw}`
           : raw;
 
+        productDebugLog("start", {
+          raw,
+          previousUserQuery,
+          isShortRefinement,
+          textForAnalysis,
+          hasCatalogSearchTool: Array.isArray(mcpClient.tools) && mcpClient.tools.some(t => t?.name === CATALOG_SEARCH_TOOL),
+        });
+
+        productInfoLog("workflow_start", {
+          conversationId,
+          debugEnabled: PRODUCT_WORKFLOW_DEBUG,
+          textForAnalysis,
+          toolsCount: Array.isArray(mcpClient.tools) ? mcpClient.tools.length : 0,
+        });
+
         const workflow = createProductRequestWorkflow({
           mcpClient,
           toolService,
@@ -321,25 +350,46 @@ async function handleChatSession({
         const { analysis, products } = await workflow.run({ textForAnalysis });
 
         // If analysis doesn't detect a product request, let the normal LLM flow proceed.
-        if (!Array.isArray(analysis) || analysis.length === 0) return false;
+        if (!Array.isArray(analysis) || analysis.length === 0) {
+          productDebugLog("no_product_detected", { analysis });
+          productInfoLog("workflow_end_no_product_detected", {
+            conversationId,
+            debugEnabled: PRODUCT_WORKFLOW_DEBUG,
+            hint: PRODUCT_WORKFLOW_DEBUG ? undefined : "Set PRODUCT_WORKFLOW_DEBUG=true to see detailed logs",
+          });
+          return false;
+        }
 
         console.log("Product request analysis:", JSON.stringify(analysis));
+        productDebugLog("product_detected", { analysisLen: analysis.length, productsLen: products?.length || 0 });
+        productInfoLog("workflow_end_product_detected", {
+          conversationId,
+          analysisLen: analysis.length,
+          productsLen: Array.isArray(products) ? products.length : 0,
+        });
 
         if (Array.isArray(products) && products.length > 0) {
           await enrichProductsWithLinks(products);
           productsToDisplay.push(...products);
+          productDebugLog("products_to_display_added", { added: products.length, total: productsToDisplay.length });
+        } else {
+          productDebugLog("no_products_found_after_search");
+          productInfoLog("workflow_product_detected_but_no_products_found", { conversationId });
         }
 
         // We ran analysis before the main model. Return true even if search yielded no products.
         return true;
       } catch (e) {
         console.warn('Auto product analysis/search failed:', e?.message || e);
+        productDebugLog("error", { message: e?.message || String(e) });
+        productInfoLog("workflow_error", { conversationId, message: e?.message || String(e) });
         return false;
       }
     };
 
     const didRunProductWorkflow = await autoAnalyzeAndSearchProductsIfNeeded();
     if (!didRunProductWorkflow) {
+      productInfoLog("workflow_skipped_fallback_to_legacy_auto_search", { conversationId });
       await autoSearchCatalogIfNeeded();
     }
 
@@ -368,6 +418,12 @@ async function handleChatSession({
               role: message.role,
               content: message.content
             });
+
+            // Capture the assistant text so we can filter product cards to match what's actually listed.
+            if (message?.role === 'assistant') {
+              const text = extractTextFromClaudeContent(message.content);
+              if (text) lastAssistantText = text;
+            }
 
             saveMessage(conversationId, message.role, JSON.stringify(message.content))
               .catch((error) => {
@@ -476,9 +532,28 @@ async function handleChatSession({
 
     // Send product results if available
     if (productsToDisplay.length > 0) {
+      // If the assistant listed products that are missing from productsToDisplay (because the model
+      // referenced items not present in tool results), try to resolve them via a targeted search.
+      await backfillProductsFromAssistantText({
+        assistantText: lastAssistantText,
+        productsToDisplay,
+        mcpClient,
+        toolService,
+        enrichProductsWithLinks,
+        catalogSearchToolName: CATALOG_SEARCH_TOOL,
+      });
+
+      const filtered = filterProductsToMentionedInText(productsToDisplay, lastAssistantText);
+      if (filtered.length !== productsToDisplay.length) {
+        console.log('Filtering product cards to match assistant text:', {
+          before: productsToDisplay.length,
+          after: filtered.length,
+          titles: extractListedProductTitlesFromAssistantText(lastAssistantText),
+        });
+      }
       stream.sendMessage({
         type: 'product_results',
-        products: productsToDisplay
+        products: filtered
       });
     }
   } catch (error) {
@@ -497,6 +572,306 @@ function getPreviousUserTextMessage(conversationHistory) {
     if (typeof msg?.content === 'string' && msg.content.trim().length > 0) return msg.content.trim();
   }
   return null;
+}
+
+function extractTextFromClaudeContent(content) {
+  try {
+    const blocks = Array.isArray(content) ? content : [content].filter(Boolean);
+    const texts = [];
+    for (const block of blocks) {
+      if (!block) continue;
+      if (typeof block === 'string') texts.push(block);
+      if (typeof block === 'object' && block.type === 'text' && typeof block.text === 'string') {
+        texts.push(block.text);
+      }
+    }
+    return texts.join('\n').trim();
+  } catch {
+    return '';
+  }
+}
+
+function normalizeForTitleMatch(s) {
+  try {
+    return String(s || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  } catch {
+    return String(s || '').toLowerCase().trim();
+  }
+}
+
+function extractListedProductTitlesFromAssistantText(text) {
+  const raw = typeof text === 'string' ? text : '';
+  if (!raw.trim()) return [];
+
+  const titles = new Set();
+
+  // Markdown links: [Title](url)
+  for (const m of raw.matchAll(/\[([^\]]+)\]\(([^)]+)\)/g)) {
+    const label = (m?.[1] || '').trim();
+    if (label) titles.add(label);
+  }
+
+  // Bold-numbered paragraph patterns:
+  // **1. Title** - **price**
+  for (const m of raw.matchAll(/^\s*\*\*\s*\d+\s*[\.\)]\s*([^*]+?)\s*\*\*/gm)) {
+    const label = (m?.[1] || '').trim();
+    if (label) titles.add(label);
+  }
+
+  // Numbered lines like: 1. **Title** - **price**
+  for (const m of raw.matchAll(/^\s*\d+\s*[\.\)]\s*\*\*([^*]+)\*\*/gm)) {
+    const label = (m?.[1] || '').trim();
+    if (label) titles.add(label);
+  }
+
+  // Numbered lines without bold: 1. Title - price
+  for (const m of raw.matchAll(/^\s*\d+\s*[\.\)]\s*([^\n]+)$/gm)) {
+    let line = (m?.[1] || '').trim();
+    if (!line) continue;
+    line = line.replace(/\*\*/g, '').trim();
+    // Remove trailing price/extra info after " - "
+    if (line.includes(' - ')) line = line.split(' - ')[0].trim();
+    if (line) titles.add(line);
+  }
+
+  // Single bold title lines (no numbering), common when the model outputs:
+  // **Title** - **price**
+  for (const m of raw.matchAll(/^\s*\*\*([^*]+?)\*\*\s*-\s*\*\*/gm)) {
+    const label = (m?.[1] || '').trim();
+    if (label) titles.add(label);
+  }
+
+  return Array.from(titles);
+}
+
+function filterProductsToMentionedInText(products, assistantText) {
+  const list = Array.isArray(products) ? products : [];
+  const titles = extractListedProductTitlesFromAssistantText(assistantText);
+  if (titles.length === 0) return list;
+
+  const wanted = titles.map(normalizeForTitleMatch).filter(Boolean);
+  if (wanted.length === 0) return list;
+
+  const matched = list.filter((p) => {
+    const pt = normalizeForTitleMatch(p?.title || '');
+    if (!pt) return false;
+    return wanted.some((w) => pt === w || pt.includes(w) || w.includes(pt));
+  });
+
+  return matched.length > 0 ? matched : list;
+}
+
+function bestMatchByTitle(candidates, wantedTitle) {
+  const wanted = normalizeForTitleMatch(wantedTitle);
+  if (!wanted) return { match: null, score: -1 };
+
+  let best = null;
+  let bestScore = -1;
+
+  for (const c of Array.isArray(candidates) ? candidates : []) {
+    const title = normalizeForTitleMatch(c?.title || '');
+    if (!title) continue;
+
+    let score = 0;
+    if (title === wanted) score = 100;
+    else if (title.includes(wanted)) score = 80;
+    else if (wanted.includes(title)) score = 60;
+    else {
+      // crude overlap score
+      const a = new Set(title.split(' ').filter(Boolean));
+      const b = new Set(wanted.split(' ').filter(Boolean));
+      let overlap = 0;
+      for (const w of b) if (a.has(w)) overlap++;
+      score = overlap;
+    }
+
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+
+  return { match: best, score: bestScore };
+}
+
+// In-memory cache for resolving "assistant-listed title" -> product card (best-effort).
+// This avoids repeated MCP searches when testing the same titles.
+const productBackfillCache = new Map(); // key: normalizedTitle -> { product, expiresAt }
+const PRODUCT_BACKFILL_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function getCachedBackfillProduct(title) {
+  try {
+    const key = normalizeForTitleMatch(title);
+    if (!key) return null;
+    const entry = productBackfillCache.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt && Date.now() > entry.expiresAt) {
+      productBackfillCache.delete(key);
+      return null;
+    }
+    return entry.product || null;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedBackfillProduct(title, product) {
+  try {
+    const key = normalizeForTitleMatch(title);
+    if (!key || !product) return;
+    productBackfillCache.set(key, { product, expiresAt: Date.now() + PRODUCT_BACKFILL_CACHE_TTL_MS });
+  } catch {
+    // ignore
+  }
+}
+
+function stripDiacritics(s) {
+  try {
+    return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  } catch {
+    return String(s || '');
+  }
+}
+
+function generateSearchQueriesForTitle(title) {
+  const raw = String(title || '').trim();
+  if (!raw) return [];
+
+  const queries = [];
+  const push = (q) => {
+    const v = String(q || '').trim();
+    if (!v) return;
+    if (!queries.includes(v)) queries.push(v);
+  };
+
+  // Full title
+  push(raw);
+
+  // Remove trailing price/extra info after " - " (if present in label)
+  push(raw.split(' - ')[0]);
+
+  // Remove common dimension patterns (e.g. "16 cm", "21cm")
+  push(raw.replace(/\b\d+\s*cm\b/gi, '').replace(/\b\d+cm\b/gi, '').replace(/\s+/g, ' ').trim());
+
+  // Remove everything after dash (often brand)
+  if (raw.includes(' - ')) push(raw.split(' - ')[0].trim());
+
+  // ASCII versions (helps when catalog search is accent-sensitive)
+  for (const q of [...queries]) push(stripDiacritics(q));
+
+  // Shorten: first 8 words (best-effort)
+  const words = raw.split(/\s+/).filter(Boolean);
+  if (words.length > 8) push(words.slice(0, 8).join(' '));
+
+  // Keep it fast: cap to the first 2 distinct queries.
+  return queries.filter(Boolean).slice(0, 2);
+}
+
+async function runWithConcurrencyLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+
+  const worker = async () => {
+    while (true) {
+      const idx = next++;
+      if (idx >= items.length) return;
+      results[idx] = await fn(items[idx], idx);
+    }
+  };
+
+  const workers = [];
+  const n = Math.max(1, Math.min(limit || 1, items.length));
+  for (let i = 0; i < n; i++) workers.push(worker());
+  await Promise.all(workers);
+  return results;
+}
+
+async function backfillProductsFromAssistantText({
+  assistantText,
+  productsToDisplay,
+  mcpClient,
+  toolService,
+  enrichProductsWithLinks,
+  catalogSearchToolName,
+}) {
+  try {
+    if (!assistantText || typeof assistantText !== 'string') return;
+    if (!Array.isArray(productsToDisplay)) return;
+    if (!Array.isArray(mcpClient?.tools) || !mcpClient.tools.some((t) => t?.name === catalogSearchToolName)) return;
+
+    const listedTitles = extractListedProductTitlesFromAssistantText(assistantText);
+    if (listedTitles.length === 0) return;
+
+    const currentMatched = filterProductsToMentionedInText(productsToDisplay, assistantText);
+    if (currentMatched.length >= listedTitles.length) return;
+
+    // Resolve each missing title with a targeted catalog search
+    const existingNormalized = new Set(productsToDisplay.map((p) => normalizeForTitleMatch(p?.title || '')).filter(Boolean));
+    const toFetch = listedTitles.filter((t) => {
+      const key = normalizeForTitleMatch(t);
+      return key && !existingNormalized.has(key);
+    });
+
+    if (toFetch.length === 0) return;
+
+    console.log('Backfilling missing product cards from assistant list:', { missing: toFetch });
+
+    const newlyAdded = [];
+    const resolved = await runWithConcurrencyLimit(toFetch, 3, async (title) => {
+      // Cache hit
+      const cached = getCachedBackfillProduct(title);
+      if (cached) {
+        return { title, product: cached, score: 999, fromCache: true };
+      }
+
+      const queries = generateSearchQueriesForTitle(title);
+      let chosen = null;
+      let chosenScore = -1;
+
+      for (const query of queries) {
+        const resp = await mcpClient.callTool(catalogSearchToolName, {
+          query,
+          context: 'Customer is searching for produits. Utilisez la requête pour trouver des articles pertinents.',
+        });
+        if (resp?.error) continue;
+
+        const candidates = toolService.processProductSearchResult(resp);
+        const { match, score } = bestMatchByTitle(candidates, title);
+        if (match && score > chosenScore) {
+          chosen = match;
+          chosenScore = score;
+        }
+
+        // Good enough → stop early
+        if (chosen && chosenScore >= 60) break;
+      }
+
+      if (chosen) setCachedBackfillProduct(title, chosen);
+      return { title, product: chosen, score: chosenScore, fromCache: false };
+    });
+
+    for (const r of resolved) {
+      if (!r?.product) continue;
+      const key = normalizeForTitleMatch(r.product?.title || '');
+      if (key && existingNormalized.has(key)) continue;
+      if (key) existingNormalized.add(key);
+      productsToDisplay.push(r.product);
+      newlyAdded.push(r.product);
+      console.log('Backfill added product:', { requestedTitle: r.title, matchedTitle: r.product?.title, score: r.score, fromCache: r.fromCache });
+    }
+
+    if (newlyAdded.length > 0) {
+      await enrichProductsWithLinks(newlyAdded);
+    }
+  } catch (e) {
+    console.warn('Backfill of missing product cards failed:', e?.message || e);
+  }
 }
 
 function getShopFromOrigin(origin) {
