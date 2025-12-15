@@ -1,6 +1,6 @@
 {
   "chat": {
-    "title": "Assistant de la boutique",
+    "title": "Assistante de la boutique",
     "inputPlaceholder": "Écrivez votre message ici…",
     "welcomeDefault": "👋 Bonjour ! Comment puis-je vous aider aujourd’hui ?",
     "sendButton": "Envoyer",
@@ -29,10 +29,18 @@
     "cartItemsCountLabel": "Articles",
     "cartSubtotalLabel": "Sous-total",
     "cartFetchFailed": "Désolé, je n’ai pas pu charger votre panier pour le moment. Veuillez réessayer.",
+    "recipeChecklistTitle": "Ustensiles / appareils",
+    "recipeChecklistSelectAll": "Tout sélectionner",
+    "recipeChecklistClearAll": "Tout désélectionner",
+    "recipeChecklistSearchButton": "Rechercher en boutique",
+    "recipeChecklistNoneSelected": "Sélectionnez au moins un élément, ou cliquez sur « Tout sélectionner ».",
     "schema": {
       "blockName": "Assistant IA (chat)",
       "settings": {
         "chatBubbleColor": "Couleur de la bulle de chat",
+        "userMessageColor": "Couleur des messages (client)",
+        "addToCartButtonColor": "Couleur du bouton « Ajouter au panier »",
+        "linkAndPriceColor": "Couleur des liens + du prix",
         "welcomeMessage": "Message de bienvenue",
         "systemPrompt": "Invite système",
         "debugLogging": "Activer les logs de debug",

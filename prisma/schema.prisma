@@ -80,3 +80,17 @@ model CustomerAccountUrls {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 }
+
+model ShopLlmSettings {
+  shop             String   @id
+  llmProvider      String   @default("anthropic") // anthropic | openai | gemini
+  defaultModel     String?
+  anthropicApiKeyEnc String?
+  anthropicApiKeyHint String?
+  openaiApiKeyEnc  String?
+  openaiApiKeyHint String?
+  geminiApiKeyEnc  String?
+  geminiApiKeyHint String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}

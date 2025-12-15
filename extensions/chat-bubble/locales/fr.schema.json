@@ -4,6 +4,9 @@
       "blockName": "Assistant IA (chat)",
       "settings": {
         "chatBubbleColor": "Couleur de la bulle de chat",
+        "userMessageColor": "Couleur des messages (client)",
+        "addToCartButtonColor": "Couleur du bouton « Ajouter au panier »",
+        "linkAndPriceColor": "Couleur des liens + du prix",
         "welcomeMessage": "Message de bienvenue",
         "systemPrompt": "Invite système",
         "standardAssistant": "Assistant standard",
@@ -13,5 +16,3 @@
     }
   }
 }
-
-

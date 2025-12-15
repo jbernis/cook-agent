@@ -2,14 +2,15 @@
  * Chat API Route
  * Handles chat interactions with Claude API and tools
  */
-import MCPClient from "../mcp-client";
+import MCPClient from "../mcp/client.server";
 import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb } from "../db.server";
-import AppConfig from "../services/config.server";
-import { createSseStream } from "../services/streaming.server";
-import { createClaudeService } from "../services/claude.server";
-import { createToolService } from "../services/tool.server";
-import { createProductRequestWorkflow } from "../services/product-request-workflow.server";
+import AppConfig from "../config/app-config.server";
+import { createSseStream } from "../streaming/sse.server";
+import { createToolService } from "../tools/tool-service.server";
+import { createProductRequestWorkflow } from "../workflows/langgraph/product-request/workflow.server";
 import { unauthenticated } from "../shopify.server";
+import { getShopLlmSettings, shopFromOrigin } from "../ai/shop-llm-settings.server";
+import { createLlmService, defaultModelForProvider } from "../ai/llm/factory.server";
 
 const PRODUCT_WORKFLOW_DEBUG =
   process.env.PRODUCT_WORKFLOW_DEBUG === "1" ||
@@ -95,6 +96,31 @@ async function handleChatRequest(request) {
     const conversationId = body.conversation_id || Date.now().toString();
     const promptType = body.prompt_type || AppConfig.api.defaultPromptType;
 
+    // Resolve per-shop secure LLM settings (API key + default model).
+    const origin = request.headers.get("Origin");
+    const shop = shopFromOrigin(origin);
+    const shopSettings = shop ? await getShopLlmSettings(shop) : null;
+
+    // APP-ONLY: LLM/provider/model are configured in Admin, not in the theme extension.
+    const resolvedProvider = shopSettings?.llmProvider || "anthropic";
+    const resolvedModel = shopSettings?.defaultModel || defaultModelForProvider(resolvedProvider);
+    const resolvedApiKey =
+      resolvedProvider === "anthropic"
+        ? (shopSettings?.anthropicApiKey || process.env.CLAUDE_API_KEY || "")
+        : resolvedProvider === "openai"
+          ? (shopSettings?.openaiApiKey || process.env.OPENAI_API_KEY || "")
+          : resolvedProvider === "gemini"
+            ? (shopSettings?.geminiApiKey || process.env.GEMINI_API_KEY || "")
+            : "";
+
+    // Helpful debugging: show which LLM/model we resolved (no secrets).
+    console.log("[chat-route] resolved llm:", {
+      provider: resolvedProvider,
+      model: resolvedModel,
+      hasApiKey: Boolean(resolvedApiKey),
+      conversationId,
+    });
+
     // Create a stream for the response
     const responseStream = createSseStream(async (stream) => {
       await handleChatSession({
@@ -102,6 +128,9 @@ async function handleChatRequest(request) {
         userMessage,
         conversationId,
         promptType,
+        llmProvider: resolvedProvider,
+        llmModel: resolvedModel,
+        llmApiKey: resolvedApiKey,
         stream
       });
     });
@@ -132,6 +161,9 @@ async function handleChatSession({
   userMessage,
   conversationId,
   promptType,
+  llmProvider,
+  llmModel,
+  llmApiKey,
   stream
 }) {
   // Tools we intentionally hide/disable. (We prefer Online Store cart via /cart.js + /cart/add.js.)
@@ -140,7 +172,20 @@ async function handleChatSession({
   const PRODUCT_DETAILS_TOOL = AppConfig.tools.productDetailsName;
 
   // Initialize services
-  const claudeService = createClaudeService();
+  let llmService;
+  try {
+    llmService = createLlmService(llmProvider, llmApiKey);
+  } catch (e) {
+    stream.sendMessage({ type: "error", error: e?.message || String(e) });
+    stream.sendMessage({ type: "end_turn" });
+    return;
+  }
+  console.log("[chat-route] using llm:", {
+    provider: llmProvider,
+    model: llmModel,
+    hasApiKey: Boolean(llmApiKey),
+    conversationId,
+  });
   const toolService = createToolService();
 
   // Initialize MCP client
@@ -188,70 +233,49 @@ async function handleChatSession({
     // Fetch all messages from the database for this conversation
     const dbMessages = await getConversationHistory(conversationId);
 
-    // Format messages for Claude API
-    conversationHistory = dbMessages.map(dbMessage => {
-      let content;
-      try {
-        content = JSON.parse(dbMessage.content);
-      } catch (e) {
-        content = dbMessage.content;
-      }
-      return {
-        role: dbMessage.role,
-        content
-      };
-    });
+    const pendingRecipeState = extractPendingRecipeStateFromDbMessages(dbMessages);
+
+    // Format messages for Claude API (strip internal state blocks)
+    conversationHistory = formatConversationHistoryForClaude(dbMessages);
 
     const enrichProductsWithLinks = async (products) => {
       try {
         if (!Array.isArray(products) || products.length === 0) return;
 
-        // 1) Try MCP product details tool first (best-effort, no extra Shopify sessions needed)
+        // PERFORMANCE NOTE:
+        // - Rendering product cards should be fast.
+        // - Link enrichment is now handled client-side (fallback to /search) when handle/url is missing.
+        // - We only call get_product_details when we need a missing variant_id for Add-to-Cart.
+
+        const needsVariantEnrichment = products.some((p) => p && !p.variant_id);
+        if (!needsVariantEnrichment) return;
+
+        // Only enrich missing variant_id (best-effort, avoid blocking UI).
         if (Array.isArray(mcpClient.tools) &&
             mcpClient.tools.some(t => t?.name === PRODUCT_DETAILS_TOOL)) {
-          for (const p of products) {
-            if (!p) continue;
-            if ((p.url && p.url !== '') || (p.handle && p.handle !== '')) continue;
-            try {
-              const detailsResponse = await mcpClient.callTool(PRODUCT_DETAILS_TOOL, { product_id: p.id });
-              if (!detailsResponse?.error) {
+          const toEnrich = products.filter((p) => p && !p.variant_id && p.id);
+
+          // Run with small concurrency (avoid slowing down the response too much).
+          const limit = 3;
+          let next = 0;
+          const workers = Array.from({ length: Math.min(limit, toEnrich.length) }, () => (async () => {
+            while (true) {
+              const idx = next++;
+              if (idx >= toEnrich.length) return;
+              const p = toEnrich[idx];
+              try {
+                const detailsResponse = await mcpClient.callTool(PRODUCT_DETAILS_TOOL, { product_id: p.id });
+                if (detailsResponse?.error) continue;
                 const detailsProducts = toolService.processProductDetailsResult(detailsResponse);
                 const details = Array.isArray(detailsProducts) ? detailsProducts[0] : null;
-                if (details?.url) p.url = details.url;
-                if (details?.handle) p.handle = details.handle;
+                if (details?.variant_id && !p.variant_id) p.variant_id = details.variant_id;
+              } catch {
+                // ignore
               }
-            } catch (e) {
-              console.warn('Product details enrichment failed:', e?.message || e);
             }
-          }
-        }
+          })());
 
-        // 2) Fallback: Storefront API offline context (if available)
-        const shop = getShopFromOrigin(shopDomain);
-        if (shop) {
-          for (const p of products) {
-            if (!p) continue;
-            if ((p.url && p.url !== '') || (p.handle && p.handle !== '')) continue;
-            try {
-              const resolved = await resolveProductLinkViaStorefront(shop, p.id);
-              const handle = resolved?.handle || null;
-              const url = resolved?.url || null;
-
-              if (handle) p.handle = handle;
-              if (url) p.url = url;
-              if (!p.url && p.handle) p.url = `/products/${p.handle}`;
-            } catch (e) {
-              console.warn('Storefront enrichment failed:', e?.message || e);
-            }
-          }
-        }
-
-        // Log a sample for debugging
-        const sample = products.find(p => p && (p.url || p.handle));
-        if (sample) {
-          console.log('Product link enrichment sample:', { id: sample.id, url: sample.url, handle: sample.handle });
-        } else {
-          console.log('Product link enrichment: no url/handle could be resolved');
+          await Promise.all(workers);
         }
       } catch (e) {
         console.warn('Product link enrichment failed:', e?.message || e);
@@ -291,7 +315,7 @@ async function handleChatSession({
         console.log(`Auto catalog search: ${query}`);
         const toolUseResponse = await mcpClient.callTool(CATALOG_SEARCH_TOOL, {
           query,
-          context: `Customer is searching for products. Use the query to find relevant items.`,
+          context: `Le client cherche des produits. Utilisez la requête pour trouver des articles pertinents.`,
         });
 
         if (toolUseResponse?.error) return;
@@ -345,9 +369,55 @@ async function handleChatSession({
           mcpClient,
           toolService,
           productSearchToolName: CATALOG_SEARCH_TOOL,
+          llmService,
         });
 
-        const { analysis, products } = await workflow.run({ textForAnalysis });
+        const workflowResult = await workflow.run({
+          userMessage: raw,
+          textForAnalysis,
+          pendingRecipeState,
+        });
+
+        // RECIPE BRANCH: the workflow generated a checklist and expects the user's selection next.
+        if (workflowResult?.kind === "recipe_checklist" && workflowResult.assistantText) {
+          const assistantText = workflowResult.assistantText;
+          const recipeStateUpdate = workflowResult.recipeStateUpdate || null;
+          const recipeChecklist = workflowResult.recipeChecklist || null;
+          const checklistItems = Array.isArray(recipeChecklist?.items) ? recipeChecklist.items : [];
+
+          // Stream the assistant message to the client (without invoking Claude for this turn).
+          stream.sendMessage({ type: "chunk", chunk: assistantText });
+          stream.sendMessage({ type: "message_complete" });
+
+          // Persist visible assistant text + hidden recipe state in the DB.
+          const blocks = [{ type: "text", text: assistantText }];
+          if (checklistItems.length > 0) {
+            blocks.push({ type: "recipe_checklist", items: checklistItems });
+          }
+          if (recipeStateUpdate) blocks.push({ type: "recipe_state", recipe_state: recipeStateUpdate });
+          await saveMessage(conversationId, "assistant", JSON.stringify(blocks));
+
+          // Send structured checklist so the frontend can render a checkbox widget.
+          if (checklistItems.length > 0) {
+            stream.sendMessage({ type: "recipe_checklist", items: checklistItems });
+          }
+
+          // End turn early (no product cards yet).
+          stream.sendMessage({ type: "end_turn" });
+          return { kind: "recipe_checklist" };
+        }
+
+        // If we handled a pending recipe selection, persist the "done" marker (hidden) so we don't stay stuck.
+        if (workflowResult?.recipeStateUpdate && workflowResult.recipeStateUpdate.status === "done") {
+          await saveMessage(
+            conversationId,
+            "assistant",
+            JSON.stringify([{ type: "recipe_state", recipe_state: workflowResult.recipeStateUpdate }])
+          );
+        }
+
+        const analysis = workflowResult?.kind === "product_results" ? workflowResult.analysis : [];
+        const products = workflowResult?.kind === "product_results" ? workflowResult.products : [];
 
         // If analysis doesn't detect a product request, let the normal LLM flow proceed.
         if (!Array.isArray(analysis) || analysis.length === 0) {
@@ -388,6 +458,10 @@ async function handleChatSession({
     };
 
     const didRunProductWorkflow = await autoAnalyzeAndSearchProductsIfNeeded();
+    // If the workflow already produced a recipe checklist, we've already ended the turn.
+    if (didRunProductWorkflow && typeof didRunProductWorkflow === "object" && didRunProductWorkflow.kind === "recipe_checklist") {
+      return;
+    }
     if (!didRunProductWorkflow) {
       productInfoLog("workflow_skipped_fallback_to_legacy_auto_search", { conversationId });
       await autoSearchCatalogIfNeeded();
@@ -397,10 +471,11 @@ async function handleChatSession({
     let finalMessage = { role: 'user', content: userMessage };
 
     while (finalMessage.stop_reason !== "end_turn") {
-      finalMessage = await claudeService.streamConversation(
+      finalMessage = await llmService.streamConversation(
         {
           messages: conversationHistory,
           promptType,
+          model: llmModel || undefined,
           tools: mcpClient.tools
         },
         {
@@ -458,7 +533,8 @@ async function handleChatSession({
                 conversationHistory,
                 toolUseId,
                 msg,
-                conversationId
+                conversationId,
+                toolName
               );
 
               stream.sendMessage({ type: 'new_message' });
@@ -560,6 +636,71 @@ async function handleChatSession({
     // The streaming handler takes care of error handling
     throw error;
   }
+}
+
+function extractPendingRecipeStateFromDbMessages(dbMessages) {
+  try {
+    if (!Array.isArray(dbMessages) || dbMessages.length === 0) return null;
+
+    let pending = null;
+
+    // Walk oldest->newest so last state wins
+    for (const m of dbMessages) {
+      if (m?.role !== "assistant") continue;
+      if (typeof m?.content !== "string") continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(m.content);
+      } catch {
+        continue;
+      }
+
+      const blocks = Array.isArray(parsed) ? parsed : [];
+      for (const b of blocks) {
+        if (!b || b.type !== "recipe_state") continue;
+        const state = b.recipe_state || b.recipeState || null;
+        if (!state || typeof state !== "object") continue;
+
+        if (state.status === "pending") pending = state;
+        if (state.status === "done") pending = null;
+      }
+    }
+
+    // Only return if it looks valid
+    if (pending && pending.status === "pending" && Array.isArray(pending.items) && pending.items.length > 0) return pending;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function formatConversationHistoryForClaude(dbMessages) {
+  const out = [];
+  for (const dbMessage of Array.isArray(dbMessages) ? dbMessages : []) {
+    let content;
+    try {
+      content = JSON.parse(dbMessage.content);
+    } catch {
+      content = dbMessage.content;
+    }
+
+    // Strip internal blocks (e.g. recipe_state) so the model only sees user-facing text/tool outputs.
+    if (Array.isArray(content)) {
+      const filtered = content.filter((b) => {
+        if (!b || typeof b !== "object") return true;
+        // These are internal-only blocks that must NOT be sent to Claude (Anthropic rejects unknown tags).
+        if (b.type === "recipe_state") return false;
+        if (b.type === "recipe_checklist") return false;
+        return true;
+      });
+      if (filtered.length === 0) continue;
+      out.push({ role: dbMessage.role, content: filtered });
+      continue;
+    }
+
+    out.push({ role: dbMessage.role, content });
+  }
+  return out;
 }
 
 function getPreviousUserTextMessage(conversationHistory) {
@@ -704,6 +845,9 @@ function bestMatchByTitle(candidates, wantedTitle) {
 // This avoids repeated MCP searches when testing the same titles.
 const productBackfillCache = new Map(); // key: normalizedTitle -> { product, expiresAt }
 const PRODUCT_BACKFILL_CACHE_TTL_MS = 10 * 60 * 1000;
+
+// In-memory cache for resolving product title -> /products/<handle> via predictive search.
+const productPredictiveLinkCache = new Map(); // key: `${shop}:${normalizedTitle}` -> { handle, url } | null
 
 function getCachedBackfillProduct(title) {
   try {
@@ -907,6 +1051,28 @@ async function resolveProductLinkViaStorefront(shop, productGid) {
   if (productLinkCache.has(key)) return productLinkCache.get(key);
 
   try {
+    // Prefer Admin API to resolve handle (requires read_products).
+    // This is the most reliable way to construct /products/<handle> when MCP tools don't return url/handle.
+    try {
+      const { admin } = await unauthenticated.admin(shop);
+      const resp = await admin.graphql(
+        `#graphql
+        query ProductHandle($id: ID!) {
+          product(id: $id) {
+            handle
+          }
+        }`,
+        { variables: { id: productGid } }
+      );
+      const json = await resp.json();
+      const handle = json?.data?.product?.handle || null;
+      const result = handle ? { handle, url: `/products/${handle}` } : null;
+      productLinkCache.set(key, result);
+      return result;
+    } catch (e) {
+      // Fall back to Storefront if Admin isn't available.
+    }
+
     const { storefront } = await unauthenticated.storefront(shop);
     const resp = await storefront.graphql(
       `#graphql
@@ -921,7 +1087,7 @@ async function resolveProductLinkViaStorefront(shop, productGid) {
     const json = await resp.json();
     const handle = json?.data?.product?.handle || null;
     const onlineStoreUrl = json?.data?.product?.onlineStoreUrl || null;
-    const result = handle || onlineStoreUrl ? { handle, url: onlineStoreUrl } : null;
+    const result = (handle || onlineStoreUrl) ? { handle, url: onlineStoreUrl || (handle ? `/products/${handle}` : null) } : null;
     productLinkCache.set(key, result);
     return result;
   } catch (e) {

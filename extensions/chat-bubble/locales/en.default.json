@@ -29,10 +29,18 @@
     "cartItemsCountLabel": "Items",
     "cartSubtotalLabel": "Subtotal",
     "cartFetchFailed": "Sorry, I couldn't load your cart right now. Please try again.",
+    "recipeChecklistTitle": "Equipment / utensils",
+    "recipeChecklistSelectAll": "Select all",
+    "recipeChecklistClearAll": "Clear all",
+    "recipeChecklistSearchButton": "Search in store",
+    "recipeChecklistNoneSelected": "Select at least one item, or click “Select all”.",
     "schema": {
       "blockName": "AI Chat Assistant",
       "settings": {
         "chatBubbleColor": "Chat bubble color",
+        "userMessageColor": "User message bubble color",
+        "addToCartButtonColor": "Add to cart button color",
+        "linkAndPriceColor": "Links + price color",
         "welcomeMessage": "Welcome message",
         "systemPrompt": "System prompt",
         "debugLogging": "Enable debug logging",

@@ -817,6 +817,12 @@
             return '<a href="' + url + '" class="shop-ai-product-link">' + text + '</a>';
           }
 
+          // Internal storefront links (relative URLs) should open in the same tab.
+          // This includes our fallback links like /search?q=... when handle/url isn't available.
+          if (typeof url === 'string' && url.trim().startsWith('/')) {
+            return '<a href="' + url.trim() + '" class="shop-ai-product-link">' + text + '</a>';
+          }
+
           // Check if it's an auth URL
           if (url.includes('shopify.com/authentication') &&
              (url.includes('oauth/authorize') || url.includes('authentication'))) {
@@ -1062,6 +1068,18 @@
             ShopAIChat.Formatting.reformatRecentAssistantMessages(messagesContainer, 4);
             break;
 
+          case 'recipe_checklist':
+            // Render an interactive checklist widget for recipe equipment selection.
+            try {
+              ShopAIChat.UI.removeTypingIndicator();
+              if (ShopAIChat.RecipeChecklist) {
+                ShopAIChat.RecipeChecklist.render(data, messagesContainer);
+              }
+            } catch (e) {
+              debugWarn('Failed to render recipe checklist widget', e);
+            }
+            break;
+
           case 'tool_use':
             if (data.tool_use_message) {
               ShopAIChat.Message.addToolUse(data.tool_use_message, messagesContainer);
@@ -1139,6 +1157,10 @@
               for (const contentBlock of messageContents) {
                 if (contentBlock.type === 'text') {
                   ShopAIChat.Message.add(contentBlock.text, message.role, messagesContainer);
+                } else if (contentBlock.type === 'recipe_checklist' && message.role === 'assistant') {
+                  if (ShopAIChat.RecipeChecklist) {
+                    ShopAIChat.RecipeChecklist.render({ items: contentBlock.items }, messagesContainer);
+                  }
                 }
               }
             } catch (e) {
@@ -1168,6 +1190,116 @@
           // Clear the conversation ID since we couldn't fetch this conversation
           sessionStorage.removeItem('shopAiConversationId');
         }
+      }
+    },
+
+    /**
+     * Recipe checklist widget (equipment/utensils selection)
+     */
+    RecipeChecklist: {
+      render: function(data, messagesContainer) {
+        const items = Array.isArray(data?.items) ? data.items.filter(Boolean) : [];
+        if (!messagesContainer || items.length === 0) return;
+
+        const section = document.createElement('div');
+        section.classList.add('shop-ai-recipe-checklist');
+
+        const header = document.createElement('div');
+        header.classList.add('shop-ai-recipe-checklist-header');
+        header.innerHTML = `<h4>${t('recipeChecklistTitle', 'Ustensiles / appareils')}</h4>`;
+        section.appendChild(header);
+
+        const list = document.createElement('div');
+        list.classList.add('shop-ai-recipe-checklist-list');
+
+        const checkboxes = [];
+        items.slice(0, 30).forEach((label, idx) => {
+          const row = document.createElement('label');
+          row.classList.add('shop-ai-recipe-checklist-item');
+          const id = `shop-ai-recipe-${Date.now()}-${idx}`;
+          row.setAttribute('for', id);
+
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.id = id;
+          cb.value = String(label);
+          cb.classList.add('shop-ai-recipe-checklist-checkbox');
+
+          const span = document.createElement('span');
+          span.classList.add('shop-ai-recipe-checklist-label');
+          span.textContent = String(label);
+
+          row.appendChild(cb);
+          row.appendChild(span);
+          list.appendChild(row);
+          checkboxes.push(cb);
+        });
+
+        section.appendChild(list);
+
+        const error = document.createElement('div');
+        error.classList.add('shop-ai-recipe-checklist-error');
+        error.style.display = 'none';
+        section.appendChild(error);
+
+        const actions = document.createElement('div');
+        actions.classList.add('shop-ai-recipe-checklist-actions');
+
+        const selectAllBtn = document.createElement('button');
+        selectAllBtn.type = 'button';
+        selectAllBtn.classList.add('shop-ai-recipe-checklist-secondary');
+        selectAllBtn.textContent = t('recipeChecklistSelectAll', 'Tout sélectionner');
+        selectAllBtn.addEventListener('click', () => {
+          checkboxes.forEach(cb => { cb.checked = true; });
+          error.style.display = 'none';
+        });
+
+        const clearAllBtn = document.createElement('button');
+        clearAllBtn.type = 'button';
+        clearAllBtn.classList.add('shop-ai-recipe-checklist-secondary');
+        clearAllBtn.textContent = t('recipeChecklistClearAll', 'Tout désélectionner');
+        clearAllBtn.addEventListener('click', () => {
+          checkboxes.forEach(cb => { cb.checked = false; });
+          error.style.display = 'none';
+        });
+
+        const searchBtn = document.createElement('button');
+        searchBtn.type = 'button';
+        searchBtn.classList.add('shop-ai-recipe-checklist-primary');
+        searchBtn.textContent = t('recipeChecklistSearchButton', 'Rechercher en boutique');
+
+        searchBtn.addEventListener('click', async () => {
+          const selected = checkboxes.filter(cb => cb.checked).map(cb => cb.value).filter(Boolean);
+          if (selected.length === 0) {
+            error.textContent = t('recipeChecklistNoneSelected', 'Sélectionne au moins un élément, ou clique sur “Tout sélectionner”.');
+            error.style.display = 'block';
+            return;
+          }
+
+          // Disable to prevent double-submit
+          searchBtn.disabled = true;
+          selectAllBtn.disabled = true;
+          clearAllBtn.disabled = true;
+          error.style.display = 'none';
+
+          const conversationId = sessionStorage.getItem('shopAiConversationId');
+          const message = `Je veux ces articles : ${selected.join(', ')}.`;
+
+          // Show as a user message then stream backend response
+          ShopAIChat.Message.add(message, 'user', messagesContainer);
+          ShopAIChat.UI.showTypingIndicator();
+          await ShopAIChat.API.streamResponse(message, conversationId, messagesContainer);
+
+          // Keep disabled (we expect the flow to move to product cards).
+        });
+
+        actions.appendChild(selectAllBtn);
+        actions.appendChild(clearAllBtn);
+        actions.appendChild(searchBtn);
+        section.appendChild(actions);
+
+        messagesContainer.appendChild(section);
+        ShopAIChat.UI.scrollToBottom();
       }
     },
 
@@ -1371,6 +1503,12 @@
 
           const handle = (product && typeof product.handle === 'string') ? product.handle.trim() : '';
           if (handle) return `/products/${handle}`;
+
+          // Fallback: if we can't resolve a real product page URL/handle, link to a storefront search
+          // so the shopper still gets a clickable path to the product.
+          const title = (product && typeof product.title === 'string') ? product.title.trim() : '';
+          if (title) return `/search?q=${encodeURIComponent(title)}&type=product`;
+
           return null;
         } catch {
           return null;
@@ -1821,8 +1959,13 @@
     }
   };
 
-  // Initialize the application when DOM is ready
-  document.addEventListener('DOMContentLoaded', function() {
+  // Initialize as early as possible (reduces "close then reopen" perception on navigation).
+  // If DOM is already ready, run immediately; otherwise wait for DOMContentLoaded.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() {
+      ShopAIChat.init();
+    });
+  } else {
     ShopAIChat.init();
-  });
+  }
 })();

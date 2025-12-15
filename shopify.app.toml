@@ -1,8 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "9f786f1b4b4e76753facff4f41124c01"
+client_id = "79c632d155fb4dffd9fb5faa9a0ed236"
 name = "cook-agent"
-application_url = "http://127.0.0.1:9293"
+application_url = "https://example.com"
 embedded = true
 
 [build]
@@ -17,4 +17,4 @@ api_version = "2026-01"
 scopes = "customer_read_customers,customer_read_orders,customer_read_store_credit_account_transactions,customer_read_store_credit_accounts,unauthenticated_read_product_listings"
 
 [auth]
-redirect_urls = [ "http://127.0.0.1:9293/api/auth" ]
+redirect_urls = [ "https://example.com/api/auth" ]

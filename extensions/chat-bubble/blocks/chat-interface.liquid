@@ -2,14 +2,34 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
 {% liquid
-  assign welcome_message = block.settings.welcome_message
-  if welcome_message == 't:chat.welcomeDefault'
-    assign welcome_message = 'chat.welcomeDefault' | t
+  assign welcome_message = block.settings.welcome_message | strip
+
+  # If the setting value is a translation token like "t:chat.welcomeDefault",
+  # resolve it via the translation filter so the shopper never sees the token.
+  if welcome_message contains 't:'
+    assign welcome_key = welcome_message | remove: 't:' | strip
+    assign translated_welcome = welcome_key | t
+
+    # Theme apps can sometimes surface "translation missing: ..." strings.
+    # If that happens, fall back to our default welcome message key.
+    if translated_welcome contains 'translation missing'
+      assign welcome_message = 'chat.welcomeDefault' | t
+    else
+      assign welcome_message = translated_welcome
+    endif
   endif
 %}
 
-<div class="shop-ai-chat-container">
-  <div class="shop-ai-chat-bubble" style="background-color: {{ block.settings.chat_bubble_color }}">
+<div
+  class="shop-ai-chat-container"
+  style="
+    --shop-ai-accent-color: {{ block.settings.chat_bubble_color }};
+    --shop-ai-user-message-color: {{ block.settings.user_message_color }};
+    --shop-ai-add-to-cart-color: {{ block.settings.add_to_cart_button_color }};
+    --shop-ai-link-and-price-color: {{ block.settings.link_and_price_color }};
+  "
+>
+  <div class="shop-ai-chat-bubble">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
     </svg>
@@ -83,6 +103,24 @@
       "type": "color",
       "id": "chat_bubble_color",
       "label": "t:chat.schema.settings.chatBubbleColor",
+      "default": "#5046e4"
+    },
+    {
+      "type": "color",
+      "id": "user_message_color",
+      "label": "t:chat.schema.settings.userMessageColor",
+      "default": "#5046e4"
+    },
+    {
+      "type": "color",
+      "id": "add_to_cart_button_color",
+      "label": "t:chat.schema.settings.addToCartButtonColor",
+      "default": "#5046e4"
+    },
+    {
+      "type": "color",
+      "id": "link_and_price_color",
+      "label": "t:chat.schema.settings.linkAndPriceColor",
       "default": "#5046e4"
     },
     {
