@@ -68,6 +68,58 @@ function normalizeForMatch(s) {
     .trim();
 }
 
+/**
+ * Extrait les produits que le client mentionne déjà posséder
+ * Exemples: "j'ai déja un moule, un fouet" -> ["moule", "fouet"]
+ */
+function extractOwnedProducts(text) {
+  const raw = normalizeText(text);
+  if (!raw) return [];
+  
+  const owned = [];
+  
+  // Pattern principal pour capturer "j'ai [déjà] un/une/des X, Y, Z"
+  // Gère les variantes: "j'ai déja", "j'ai déjà", "j'ai deja", "j'ai dejà"
+  const mainPattern = /\bj'?ai\s+(?:deja|déjà|dejà|déja|dejá)\s+((?:un|une|des)\s+[^,\.!?\n]+(?:,\s*(?:un|une|des)\s+[^,\.!?\n]+)*)/gi;
+  const mainMatch = raw.match(mainPattern);
+  
+  if (mainMatch) {
+    // Extraire tous les produits de la liste
+    for (const match of mainMatch) {
+      // Trouver tous les "un/une/des X" dans la chaîne
+      const productPattern = /(?:un|une|des)\s+([^,\.!?\n]+)/gi;
+      const products = [...match.matchAll(productPattern)];
+      for (const productMatch of products) {
+        const product = productMatch[1]?.trim();
+        if (product) owned.push(product);
+      }
+    }
+  }
+  
+  // Pattern secondaire pour "j'ai un/une/des X" (sans "déjà")
+  // Mais seulement si on n'a pas déjà trouvé quelque chose avec "déjà"
+  if (owned.length === 0) {
+    const secondaryPattern = /\bj'?ai\s+(?:un|une|des)\s+([^,\.!?\n]+)/gi;
+    const secondaryMatches = [...raw.matchAll(secondaryPattern)];
+    for (const match of secondaryMatches) {
+      const product = match[1]?.trim();
+      if (product) {
+        // Si plusieurs produits séparés par des virgules
+        const products = product.split(/[,et]/i).map(p => p.trim()).filter(Boolean);
+        owned.push(...products);
+      }
+    }
+  }
+  
+  // Nettoyer: retirer les articles et normaliser
+  const cleaned = owned
+    .map(p => p.trim().replace(/^(un|une|des|le|la|les|du|de|d')\s+/i, '').trim())
+    .filter(p => p.length > 0 && p.length < 50); // Filtrer les chaînes trop longues (probablement des erreurs)
+  
+  // Normaliser pour la comparaison
+  return Array.from(new Set(cleaned.map(p => normalizeForMatch(p)))).filter(Boolean);
+}
+
 function parseRecipeSelectionFromUserMessage(userMessage, recipeState) {
   const msg = normalizeText(userMessage);
   const items = Array.isArray(recipeState?.items) ? recipeState.items : [];
@@ -177,6 +229,59 @@ function matchesAllCharacteristics(product, characteristics) {
 }
 
 /**
+ * Helper function to stream text progressively
+ * @param {string} text - The text to stream
+ * @param {Function} onChunk - Callback function called with each chunk
+ * @param {number} chunkSize - Number of words per chunk (default: 3)
+ * @param {number} delayMs - Delay between chunks in milliseconds (default: 80)
+ */
+async function streamTextProgressively(text, onChunk, chunkSize = 3, delayMs = 80) {
+  if (!onChunk || typeof onChunk !== 'function') return;
+  
+  // Streamer par mots pour un effet plus naturel
+  const words = text.split(/(\s+)/); // Garder les espaces
+  for (let i = 0; i < words.length; i += chunkSize) {
+    const chunk = words.slice(i, i + chunkSize).join('');
+    onChunk(chunk);
+    // Délai configurable pour simuler le streaming naturel
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+}
+
+/**
+ * Helper function to stream recipe text with progressive list items
+ * Streams the header first, then each list item individually
+ * @param {string} headerText - The text before the list (summary + intro)
+ * @param {string[]} listItems - Array of list items to stream
+ * @param {Function} onChunk - Callback function called with each chunk
+ * @param {number} delayMs - Delay between chunks in milliseconds (default: 80)
+ */
+async function streamRecipeTextWithProgressiveList(headerText, listItems, onChunk, delayMs = 80) {
+  if (!onChunk || typeof onChunk !== 'function') return;
+  
+  // Streamer le header progressivement (par mots)
+  const headerWords = headerText.split(/(\s+)/);
+  for (let i = 0; i < headerWords.length; i += 3) {
+    const chunk = headerWords.slice(i, i + 3).join('');
+    onChunk(chunk);
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  
+  // Streamer chaque item de la liste individuellement avec le même délai
+  if (Array.isArray(listItems) && listItems.length > 0) {
+    for (const item of listItems) {
+      const itemText = `- ${item}\n`;
+      onChunk(itemText);
+      // Utiliser le même délai pour la cohérence
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  } else {
+    // Aucun élément détecté
+    onChunk(`- (aucun élément détecté)\n`);
+  }
+}
+
+/**
  * Creates a LangGraph workflow instance.
  *
  * @param {Object} deps
@@ -185,6 +290,7 @@ function matchesAllCharacteristics(product, characteristics) {
  * @param {string} deps.productSearchToolName
  * @param {{ streamConversation: Function }} deps.llmService
  * @param {string} [deps.recipePromptType]
+ * @param {Function} [deps.onStreamChunk] - Callback function for streaming text chunks
  * @returns {{
  *   run: (params: {
  *     userMessage: string,
@@ -203,6 +309,7 @@ export function createProductRequestWorkflow({
   productSearchToolName = AppConfig.tools.productSearchName,
   llmService,
   recipePromptType = "recipeExtractor",
+  onStreamChunk = null,
 }) {
   const graph = new StateGraph({
     channels: {
@@ -229,20 +336,36 @@ export function createProductRequestWorkflow({
       Array.isArray(pending.items) &&
       pending.items.length > 0;
 
+    // PRIORITÉ 1: Toujours vérifier d'abord si c'est une nouvelle recette (même avec état en attente)
+    // Cela permet de gérer les cas comme "je veux faire un gateau au chocolat, j'ai déja un moule"
+    const classified = classifyCustomerMessageIntent(msg);
+    debugLog("node:route:classified", { msg, classified });
+    
+    // Cas HYBRIDE: recette + produit détectés → demander au LLM de décider
+    if (classified.kind === "hybrid") {
+      return { intentRoute: "HYBRID_RESOLVE" };
+    }
+    
+    if (classified.kind === "recipe") {
+      // Nouvelle recette détectée, démarrer le flux de recette
+      return { intentRoute: "RECIPE_START" };
+    }
+
     if (hasPending && msg) {
-      // If the user explicitly asks for a recipe again, restart recipe flow.
+      // Si l'utilisateur demande explicitement une recette, redémarrer le flux
       if (isExplicitRecipePrompt(msg)) return { intentRoute: "RECIPE_START" };
 
-      // If the user is selecting from the checklist, go to selection.
+      // Si l'utilisateur sélectionne dans la checklist, aller à la sélection
       const selected = parseRecipeSelectionFromUserMessage(msg, pending);
       const isSelectAllOrNone = /\b(tout|tous|toute|toutes|aucun|aucune|rien)\b/i.test(
         stripDiacritics(msg.toLowerCase())
       );
       if (selected.length > 0 || isSelectAllOrNone) return { intentRoute: "RECIPE_SELECTION" };
 
-      // Otherwise, route based on shared classifier and clear pending state to avoid loops.
+      // Sinon, router selon le classificateur et nettoyer l'état en attente pour éviter les boucles
       const classifiedPending = classifyCustomerMessageIntent(msg);
       debugLog("node:route:classified_pending", { msg, classifiedPending });
+      if (classifiedPending.kind === "hybrid") return { intentRoute: "HYBRID_RESOLVE" };
       if (classifiedPending.kind === "recipe") return { intentRoute: "RECIPE_START" };
       return {
         intentRoute: classifiedPending.kind === "product" ? "PRODUCT" : "OTHER",
@@ -254,10 +377,6 @@ export function createProductRequestWorkflow({
       };
     }
 
-    const classified = classifyCustomerMessageIntent(msg);
-    debugLog("node:route:classified", { msg, classified });
-
-    if (classified.kind === "recipe") return { intentRoute: "RECIPE_START" };
     if (classified.kind === "product") return { intentRoute: "PRODUCT" };
     return { intentRoute: "OTHER" };
   });
@@ -265,6 +384,10 @@ export function createProductRequestWorkflow({
   graph.addNode("extract_recipe", async (state) => {
     const msg = normalizeText(state.userMessage);
     if (!msg || !llmService) return { assistantText: "", recipeStateUpdate: null };
+
+    // Extraire les produits que le client mentionne déjà posséder
+    const ownedProducts = extractOwnedProducts(msg);
+    debugLog("node:extract_recipe:owned_products", { ownedProducts });
 
     // Use a dedicated prompt that outputs strict JSON in French.
     let buffer = "";
@@ -298,25 +421,66 @@ export function createProductRequestWorkflow({
 
     const deduped = Array.from(new Set(items)).slice(0, 25);
 
-    // Keep the assistant message short; the UI will render the interactive checklist widget.
-    const assistantText = [
+    // Filtrer les produits que le client a déjà pour ne garder que ceux qui manquent
+    const missingItems = deduped.filter((item) => {
+      const itemNormalized = normalizeForMatch(item);
+      // Vérifier si l'item correspond à un produit déjà possédé
+      return !ownedProducts.some((owned) => {
+        const ownedNormalized = normalizeForMatch(owned);
+        // Correspondance exacte ou si l'item contient le produit possédé (ou vice versa)
+        return itemNormalized === ownedNormalized ||
+               itemNormalized.includes(ownedNormalized) ||
+               ownedNormalized.includes(itemNormalized);
+      });
+    });
+
+    debugLog("node:extract_recipe:filtered", {
+      totalItems: deduped.length,
+      ownedCount: ownedProducts.length,
+      missingCount: missingItems.length,
+      ownedProducts,
+      missingItems,
+    });
+
+    // Construire le header avec information sur ce que le client a déjà
+    let summaryText = summary || `Je peux t'aider à préparer la liste du matériel pour cette recette.`;
+    if (ownedProducts.length > 0) {
+      summaryText += `\n\nJ'ai noté que tu as déjà : ${ownedProducts.join(", ")}.`;
+      summaryText += `\n\nJe t'affiche ci-dessous uniquement les **ustensiles / appareils** qui te manquent.`;
+    } else {
+      summaryText += `\n\nJe t'affiche une liste d'**ustensiles / appareils** juste en dessous : coche ce qu'il te manque, puis lance la recherche.`;
+    }
+
+    const headerText = [
       `### Résumé`,
-      summary || `Je peux t’aider à préparer la liste du matériel pour cette recette.`,
-      ``,
-      `Je t’affiche une liste d’**ustensiles / appareils** juste en dessous : coche ce qu’il te manque, puis lance la recherche.`,
+      summaryText,
       ``,
       // Fallback for clients that haven't loaded the widget yet (or are cached):
-      `### Ustensiles / appareils`,
-      ...(deduped.length > 0 ? deduped.map((it) => `- ${it}`) : [`- (aucun élément détecté)`]),
+      `### Ustensiles / appareils${ownedProducts.length > 0 ? " (manquants)" : ""}`,
+      ``,
     ].join("\n");
+
+    // Construire le texte complet pour la sauvegarde
+    const itemsToShow = missingItems.length > 0 ? missingItems : deduped;
+    const assistantText = [
+      headerText,
+      ...(itemsToShow.length > 0 ? itemsToShow.map((it) => `- ${it}`) : [`- (aucun élément détecté)`]),
+    ].join("\n");
+
+    // Streamer le texte avec liste progressive si le callback est disponible
+    // Utiliser un délai de 80ms pour un rythme cohérent
+    if (onStreamChunk && typeof onStreamChunk === 'function') {
+      await streamRecipeTextWithProgressiveList(headerText, itemsToShow, onStreamChunk, 80);
+    }
 
     return {
       assistantText,
-      recipeChecklist: { summary, items: deduped },
+      recipeChecklist: { summary, items: itemsToShow },
       recipeStateUpdate: {
         status: "pending",
         summary,
-        items: deduped.map((label) => ({ label })),
+        items: itemsToShow.map((label) => ({ label })),
+        ownedProducts: ownedProducts, // Sauvegarder pour référence future
         createdAt: Date.now(),
       },
     };
@@ -336,6 +500,73 @@ export function createProductRequestWorkflow({
     // Build a French shopping intent sentence so the deterministic analyzer reliably triggers.
     const textForAnalysis = `Je cherche ${selected.join(", ")}.`;
     return { textForAnalysis, recipeStateUpdate };
+  });
+
+  graph.addNode("resolve_hybrid", async (state) => {
+    const msg = normalizeText(state.userMessage);
+    if (!msg || !llmService) {
+      debugLog("node:resolve_hybrid:no_msg_or_llm", { msg: !!msg, llmService: !!llmService });
+      return { intentRoute: "RECIPE_START" }; // Fallback vers recette par défaut
+    }
+
+    try {
+      // Prompt pour demander au LLM de déterminer l'intention principale
+      const prompt = `Analyse ce message et détermine l'intention principale. Le message contient à la fois une référence à une recette de cuisine et à un produit.
+
+Message: "${msg}"
+
+Détermine si l'intention principale est:
+- "recipe": si l'utilisateur veut faire une recette et mentionne des produits qu'il possède déjà (ex: "je veux faire un gateau, j'ai déjà un fouet")
+- "product": si l'utilisateur veut faire une recette mais cherche à acheter un produit manquant (ex: "je veux faire un gateau et il me manque un fouet")
+
+Réponds UNIQUEMENT avec un JSON valide de cette forme:
+{
+  "intent": "recipe" | "product",
+  "reason": "explication courte en français"
+}`;
+
+      let buffer = "";
+      const final = await llmService.streamConversation(
+        {
+          messages: [{ role: "user", content: prompt }],
+          promptType: "standardAssistant",
+          tools: [],
+        },
+        {
+          onText: (delta) => {
+            buffer += delta || "";
+          },
+        }
+      );
+
+      // Fallback si on n'a pas capturé les deltas
+      if (!buffer) {
+        const blocks = Array.isArray(final?.content) ? final.content : [];
+        buffer = blocks
+          .map((b) => (b && b.type === "text" && typeof b.text === "string" ? b.text : ""))
+          .join("\n")
+          .trim();
+      }
+
+      const parsed = safeJsonParseFromModelText(buffer) || {};
+      const intent = normalizeText(parsed?.intent || "").toLowerCase();
+      debugLog("node:resolve_hybrid:result", { 
+        intent, 
+        parsed, 
+        buffer: buffer, // Réponse complète du LLM
+        originalMessage: msg 
+      });
+
+      if (intent === "product") {
+        return { intentRoute: "PRODUCT" };
+      }
+
+      // Par défaut, on route vers la recette
+      return { intentRoute: "RECIPE_START" };
+    } catch (error) {
+      debugLog("node:resolve_hybrid:error", { error: error?.message || String(error) });
+      return { intentRoute: "RECIPE_START" }; // Fallback sur erreur
+    }
   });
 
   graph.addNode("analyze", async (state) => {
@@ -426,6 +657,17 @@ export function createProductRequestWorkflow({
     {
       RECIPE_START: "extract_recipe",
       RECIPE_SELECTION: "select_from_recipe",
+      HYBRID_RESOLVE: "resolve_hybrid",
+      PRODUCT: "analyze",
+      OTHER: END,
+    }
+  );
+
+  graph.addConditionalEdges(
+    "resolve_hybrid",
+    (state) => state.intentRoute || "RECIPE_START",
+    {
+      RECIPE_START: "extract_recipe",
       PRODUCT: "analyze",
       OTHER: END,
     }

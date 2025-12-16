@@ -3,10 +3,13 @@
   "private": true,
   "scripts": {
     "build": "react-router build",
+    "build:cloudflare": "npm run build",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
     "deploy": "shopify app deploy",
+    "deploy:cloudflare": "npm run build:cloudflare && wrangler pages deploy build/client --project-name=cook-agent",
+    "deploy:cloudflare:workers": "npm run build:cloudflare && wrangler deploy",
     "config:use": "shopify app config use",
     "env": "shopify app env",
     "start": "react-router-serve ./build/server/index.js",
@@ -17,7 +20,8 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "db:reset": "node scripts/reset-db.mjs"
   },
   "type": "module",
   "engines": {

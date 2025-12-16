@@ -1,16 +1,13 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// Schéma Prisma pour PostgreSQL (à utiliser pour Cloudflare)
+// Copiez ce contenu dans schema.prisma et remplacez le datasource SQLite
 
 generator client {
   provider = "prisma-client-js"
 }
 
-// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
-// enough when changing adapters.
-// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -35,7 +32,7 @@ model CustomerToken {
   id              String    @id
   conversationId  String
   accessToken     String
-  refreshToken    String?
+  refreshToken     String?
   expiresAt       DateTime
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -85,7 +82,6 @@ model ShopLlmSettings {
   shop             String   @id
   llmProvider      String   @default("anthropic") // anthropic | openai | gemini
   defaultModel     String?
-  maxHistoryMessages Int?   @default(20) // Maximum number of messages to send to LLM (null = unlimited)
   anthropicApiKeyEnc String?
   anthropicApiKeyHint String?
   openaiApiKeyEnc  String?
@@ -95,3 +91,4 @@ model ShopLlmSettings {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
+

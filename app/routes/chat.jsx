@@ -3,7 +3,7 @@
  * Handles chat interactions with Claude API and tools
  */
 import MCPClient from "../mcp/client.server";
-import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb } from "../db.server";
+import prisma, { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb } from "../db.server";
 import AppConfig from "../config/app-config.server";
 import { createSseStream } from "../streaming/sse.server";
 import { createToolService } from "../tools/tool-service.server";
@@ -131,6 +131,7 @@ async function handleChatRequest(request) {
         llmProvider: resolvedProvider,
         llmModel: resolvedModel,
         llmApiKey: resolvedApiKey,
+        shopSettings,
         stream
       });
     });
@@ -164,6 +165,7 @@ async function handleChatSession({
   llmProvider,
   llmModel,
   llmApiKey,
+  shopSettings,
   stream
 }) {
   // Tools we intentionally hide/disable. (We prefer Online Store cart via /cart.js + /cart/add.js.)
@@ -235,8 +237,12 @@ async function handleChatSession({
 
     const pendingRecipeState = extractPendingRecipeStateFromDbMessages(dbMessages);
 
-    // Format messages for Claude API (strip internal state blocks)
-    conversationHistory = formatConversationHistoryForClaude(dbMessages);
+    // Get maxHistoryMessages from shop settings or use default
+    const maxHistoryFromSettings = shopSettings?.maxHistoryMessages;
+    const maxHistory = maxHistoryFromSettings ?? AppConfig.api.maxHistoryMessages ?? 20;
+
+    // Format messages for LLM API (strip internal state blocks and orphaned tool_results)
+    conversationHistory = formatConversationHistoryForLLM(dbMessages, maxHistory);
 
     const enrichProductsWithLinks = async (products) => {
       try {
@@ -370,6 +376,10 @@ async function handleChatSession({
           toolService,
           productSearchToolName: CATALOG_SEARCH_TOOL,
           llmService,
+          onStreamChunk: (chunk) => {
+            // Streamer chaque chunk au client
+            stream.sendMessage({ type: "chunk", chunk });
+          },
         });
 
         const workflowResult = await workflow.run({
@@ -385,8 +395,7 @@ async function handleChatSession({
           const recipeChecklist = workflowResult.recipeChecklist || null;
           const checklistItems = Array.isArray(recipeChecklist?.items) ? recipeChecklist.items : [];
 
-          // Stream the assistant message to the client (without invoking Claude for this turn).
-          stream.sendMessage({ type: "chunk", chunk: assistantText });
+          // Le texte a déjà été streamé via onStreamChunk, on envoie juste le message_complete
           stream.sendMessage({ type: "message_complete" });
 
           // Persist visible assistant text + hidden recipe state in the DB.
@@ -397,8 +406,24 @@ async function handleChatSession({
           if (recipeStateUpdate) blocks.push({ type: "recipe_state", recipe_state: recipeStateUpdate });
           await saveMessage(conversationId, "assistant", JSON.stringify(blocks));
 
-          // Send structured checklist so the frontend can render a checkbox widget.
+          // Streamer les items de la checklist progressivement
+          // Utiliser le même délai que pour le texte (80ms) pour la cohérence
           if (checklistItems.length > 0) {
+            // Envoyer d'abord le début de la checklist (header)
+            stream.sendMessage({ type: "recipe_checklist_start" });
+            
+            // Streamer chaque item individuellement avec un délai de 80ms
+            for (let i = 0; i < checklistItems.length; i++) {
+              await new Promise(resolve => setTimeout(resolve, 80)); // Délai entre chaque item
+              stream.sendMessage({ 
+                type: "recipe_checklist_item", 
+                item: checklistItems[i],
+                index: i,
+                total: checklistItems.length
+              });
+            }
+            
+            // Envoyer la fin de la checklist avec tous les items (pour compatibilité)
             stream.sendMessage({ type: "recipe_checklist", items: checklistItems });
           }
 
@@ -488,7 +513,7 @@ async function handleChatSession({
           },
 
           // Handle complete messages
-          onMessage: (message) => {
+          onMessage: async (message) => {
             conversationHistory.push({
               role: message.role,
               content: message.content
@@ -500,6 +525,7 @@ async function handleChatSession({
               if (text) lastAssistantText = text;
             }
 
+            // Save message initially (products will be added later if available)
             saveMessage(conversationId, message.role, JSON.stringify(message.content))
               .catch((error) => {
                 console.error("Error saving message to database:", error);
@@ -631,6 +657,45 @@ async function handleChatSession({
         type: 'product_results',
         products: filtered
       });
+      
+      // Update the last assistant message in database to include product results
+      if (filtered.length > 0 && lastAssistantText) {
+        try {
+          // Get the last assistant message from database
+          const dbMessages = await getConversationHistory(conversationId);
+          const lastAssistantMessage = dbMessages.filter(m => m.role === 'assistant').pop();
+          
+          if (lastAssistantMessage) {
+            // Parse existing content
+            let contentArray;
+            try {
+              contentArray = JSON.parse(lastAssistantMessage.content);
+              if (!Array.isArray(contentArray)) {
+                contentArray = [{ type: 'text', text: extractTextFromClaudeContent(lastAssistantMessage.content) }];
+              }
+            } catch {
+              contentArray = [{ type: 'text', text: lastAssistantMessage.content }];
+            }
+            
+            // Remove any existing product_results block
+            contentArray = contentArray.filter(block => block.type !== 'product_results');
+            
+            // Add product_results block
+            contentArray.push({
+              type: 'product_results',
+              products: filtered
+            });
+            
+            // Update the message in database
+            await prisma.message.update({
+              where: { id: lastAssistantMessage.id },
+              data: { content: JSON.stringify(contentArray) }
+            });
+          }
+        } catch (error) {
+          console.error('Error updating message with product results:', error);
+        }
+      }
     }
   } catch (error) {
     // The streaming handler takes care of error handling
@@ -674,9 +739,45 @@ function extractPendingRecipeStateFromDbMessages(dbMessages) {
   }
 }
 
-function formatConversationHistoryForClaude(dbMessages) {
+/**
+ * Format conversation history for LLM providers (Claude, OpenAI, Gemini)
+ * - Limits history to maxHistoryMessages
+ * - Strips internal blocks (recipe_state, product_results, etc.)
+ * - Removes orphaned tool_result blocks that reference non-existent tool_use_id
+ *   (prevents errors with Anthropic and reduces unnecessary data for other providers)
+ */
+function formatConversationHistoryForLLM(dbMessages, maxHistoryMessages = null) {
+  // Limit history to reduce token usage and costs
+  // maxHistoryMessages can come from shop settings or AppConfig
+  const maxHistory = maxHistoryMessages ?? AppConfig.api.maxHistoryMessages ?? null;
+  let messagesToProcess = Array.isArray(dbMessages) ? dbMessages : [];
+  
+  if (maxHistory && maxHistory > 0 && messagesToProcess.length > maxHistory) {
+    // Keep only the last N messages (most recent context)
+    messagesToProcess = messagesToProcess.slice(-maxHistory);
+    console.log(`[chat-route] Limiting history: ${dbMessages.length} messages -> ${messagesToProcess.length} messages (maxHistory: ${maxHistory})`);
+  }
+
+  // First pass: collect all tool_use_id from assistant messages
+  const knownToolUseIds = new Set();
+  for (const dbMessage of messagesToProcess) {
+    if (dbMessage.role !== "assistant") continue;
+    let content;
+    try {
+      content = JSON.parse(dbMessage.content);
+    } catch {
+      content = dbMessage.content;
+    }
+    const blocks = Array.isArray(content) ? content : [content].filter(Boolean);
+    for (const block of blocks) {
+      if (block?.type === "tool_use" && block.id) {
+        knownToolUseIds.add(block.id);
+      }
+    }
+  }
+
   const out = [];
-  for (const dbMessage of Array.isArray(dbMessages) ? dbMessages : []) {
+  for (const dbMessage of messagesToProcess) {
     let content;
     try {
       content = JSON.parse(dbMessage.content);
@@ -691,6 +792,14 @@ function formatConversationHistoryForClaude(dbMessages) {
         // These are internal-only blocks that must NOT be sent to Claude (Anthropic rejects unknown tags).
         if (b.type === "recipe_state") return false;
         if (b.type === "recipe_checklist") return false;
+        // Stored for the frontend; must not be sent to the LLM provider.
+        if (b.type === "product_results") return false;
+        // Remove tool_result blocks that reference tool_use_id that don't exist in the history
+        // This can happen when history is truncated and a tool_use was removed but its tool_result remains
+        if (b.type === "tool_result" && b.tool_use_id && !knownToolUseIds.has(b.tool_use_id)) {
+          console.warn(`[chat-route] Removing orphaned tool_result with tool_use_id: ${b.tool_use_id}`);
+          return false;
+        }
         return true;
       });
       if (filtered.length === 0) continue;

@@ -41,6 +41,8 @@
         "userMessageColor": "Couleur des messages (client)",
         "addToCartButtonColor": "Couleur du bouton « Ajouter au panier »",
         "linkAndPriceColor": "Couleur des liens + du prix",
+        "chatMaxWidth": "Largeur du chat (max)",
+        "chatHeightPercent": "Hauteur du chat",
         "welcomeMessage": "Message de bienvenue",
         "systemPrompt": "Invite système",
         "debugLogging": "Activer les logs de debug",

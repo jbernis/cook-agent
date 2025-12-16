@@ -61,6 +61,33 @@ This repo can be customized. You can:
 You can learn how from our [dev docs](https://shopify.dev/docs/apps/build/storefront-mcp).
 
 ## Deployment
+
+### Cloudflare (Recommandé)
+
+Pour déployer sur Cloudflare Pages/Workers, suivez le guide complet dans [DEPLOYMENT.md](./DEPLOYMENT.md).
+
+**Déploiement rapide:**
+```bash
+# 1. Installer Wrangler
+npm install -g wrangler
+
+# 2. Se connecter à Cloudflare
+wrangler login
+
+# 3. Configurer les secrets (voir DEPLOYMENT.md)
+wrangler secret put SHOPIFY_API_KEY
+wrangler secret put SHOPIFY_API_SECRET
+# ... autres secrets
+
+# 4. Migrer vers PostgreSQL (obligatoire pour Cloudflare)
+# Voir DEPLOYMENT.md pour les détails
+
+# 5. Build et déploiement
+npm run deploy:cloudflare
+```
+
+### Autres plateformes
+
 Follow standard Shopify app deployment procedures as outlined in the [Shopify documentation](https://shopify.dev/docs/apps/deployment/web).
 
 ## Contributing

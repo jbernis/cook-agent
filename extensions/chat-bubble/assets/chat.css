@@ -14,6 +14,9 @@
     --shop-ai-user-message-color: var(--shop-ai-accent-color, #5046e4);
     --shop-ai-add-to-cart-color: var(--shop-ai-accent-color, #5046e4);
     --shop-ai-link-and-price-color: var(--shop-ai-accent-color, #5046e4);
+    /* Size controls (set inline by block settings) */
+    --shop-ai-chat-max-width: 450px;
+    --shop-ai-chat-height-mult: 0.7;
   }
 
   .shop-ai-chat-bubble {
@@ -56,9 +59,9 @@
     bottom: 80px;
     right: 0;
     width: 90vw;
-    max-width: 450px;
-    height: 70vh;
-    height: calc(var(--viewport-height, 100vh) * 0.7);
+    max-width: var(--shop-ai-chat-max-width, 450px);
+    height: calc(100vh * var(--shop-ai-chat-height-mult, 0.7));
+    height: calc(var(--viewport-height, 100vh) * var(--shop-ai-chat-height-mult, 0.7));
     max-height: 650px;
     min-height: 350px;
     background-color: white;

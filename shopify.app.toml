@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "79c632d155fb4dffd9fb5faa9a0ed236"
+client_id = "f25f459fe11b0da3163d521742318cfe"
 name = "cook-agent"
 application_url = "https://example.com"
 embedded = true

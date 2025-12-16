@@ -1,5 +1,6 @@
 {
   "chat": {
+    "welcomeDefault": "👋 Hi there! How can I help you today?",
     "schema": {
       "blockName": "AI Chat Assistant",
       "settings": {
@@ -7,6 +8,8 @@
         "userMessageColor": "User message bubble color",
         "addToCartButtonColor": "Add to cart button color",
         "linkAndPriceColor": "Links + price color",
+        "chatMaxWidth": "Chat width (max)",
+        "chatHeightPercent": "Chat height",
         "welcomeMessage": "Welcome message",
         "systemPrompt": "System prompt",
         "standardAssistant": "Standard assistant",

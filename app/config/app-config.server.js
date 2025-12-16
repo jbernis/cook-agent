@@ -16,6 +16,9 @@ export const AppConfig = {
     },
     maxTokens: 2000,
     defaultPromptType: "standardAssistant",
+    // Limit conversation history sent to LLM to reduce costs and improve performance
+    // Only the last N messages will be sent (keeps recent context while limiting token usage)
+    maxHistoryMessages: 20, // Set to null or 0 to send all messages
   },
 
   // Error Message Templates

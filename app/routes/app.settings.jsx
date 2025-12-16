@@ -30,6 +30,8 @@ const I18N = {
     apiKeySavedPrefix: "Saved:",
     encryptionKeyNotePrefix: "Requires",
     encryptionKeyNoteSuffix: "to be set on the server.",
+    maxHistoryMessagesLabel: "Max history messages",
+    maxHistoryMessagesHelp: "Maximum number of messages to send to LLM (default: 20, null = unlimited). Reduces costs for long conversations.",
   },
   fr: {
     titleBar: "Réglages LLM",
@@ -59,6 +61,8 @@ const I18N = {
     apiKeySavedPrefix: "Enregistré :",
     encryptionKeyNotePrefix: "Nécessite que",
     encryptionKeyNoteSuffix: "soit défini côté serveur.",
+    maxHistoryMessagesLabel: "Nombre max de messages dans l'historique",
+    maxHistoryMessagesHelp: "Nombre maximum de messages à envoyer au LLM (défaut: 20, null = illimité). Réduit les coûts pour les conversations longues.",
   },
 };
 
@@ -146,10 +150,15 @@ export const loader = async ({ request }) => {
     ? String(settings.defaultModel).trim()
     : (AppConfig.api.defaultModels?.[provider] || AppConfig.api.defaultModel);
 
+  const maxHistoryMessages = typeof settings?.maxHistoryMessages === "number" 
+    ? settings.maxHistoryMessages 
+    : (AppConfig.api.maxHistoryMessages || 20);
+
   return {
     shop,
     llmProvider: provider,
     defaultModel: configuredModel,
+    maxHistoryMessages,
     defaultModels: AppConfig.api.defaultModels || {},
     hasAnthropicKey,
     anthropicKeyHint,
@@ -195,6 +204,8 @@ export const action = async ({ request }) => {
 
   const llmProvider = String(formData.get("llmProvider") || "anthropic");
   const defaultModel = String(formData.get("defaultModel") || "");
+  const maxHistoryMessagesRaw = formData.get("maxHistoryMessages");
+  const maxHistoryMessages = maxHistoryMessagesRaw ? parseInt(String(maxHistoryMessagesRaw), 10) : null;
   const anthropicApiKey = String(formData.get("anthropicApiKey") || "");
   const openaiApiKey = String(formData.get("openaiApiKey") || "");
   const geminiApiKey = String(formData.get("geminiApiKey") || "");
@@ -204,6 +215,7 @@ export const action = async ({ request }) => {
       shop,
       llmProvider,
       defaultModel,
+      maxHistoryMessages: (maxHistoryMessages && maxHistoryMessages > 0) ? maxHistoryMessages : null,
       anthropicApiKey,
       openaiApiKey,
       geminiApiKey,
@@ -259,6 +271,7 @@ export default function SettingsPage() {
   const [provider, setProvider] = useState(String(data.llmProvider || "anthropic"));
   const [models, setModels] = useState(initialModels);
   const [selectedModel, setSelectedModel] = useState(String(data.defaultModel || ""));
+  const [maxHistoryMessages, setMaxHistoryMessages] = useState(String(data.maxHistoryMessages || "20"));
   const [modelsError, setModelsError] = useState("");
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -468,6 +481,22 @@ export default function SettingsPage() {
                   </option>
                 ))}
               </select>
+            </label>
+
+            <label>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>{t.maxHistoryMessagesLabel}</div>
+              <input
+                name="maxHistoryMessages"
+                type="number"
+                min="1"
+                value={maxHistoryMessages}
+                onChange={(e) => setMaxHistoryMessages(e.target.value)}
+                placeholder="20"
+                style={{ width: "100%", padding: 8 }}
+              />
+              <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
+                {t.maxHistoryMessagesHelp}
+              </div>
             </label>
 
             {provider === "anthropic" ? (

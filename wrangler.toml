@@ -1,0 +1,23 @@
+# Configuration Cloudflare Workers pour l'app Shopify
+# Documentation: https://developers.cloudflare.com/workers/wrangler/configuration/
+
+name = "cook-agent"
+compatibility_date = "2024-12-15"
+compatibility_flags = ["nodejs_compat"]
+
+# Configuration pour Cloudflare Pages avec Workers
+pages_build_output_dir = "build/client"
+
+# Variables d'environnement (à configurer via Cloudflare Dashboard ou wrangler secret)
+# Les secrets doivent être définis avec: wrangler secret put <KEY>
+# Exemple: wrangler secret put SHOPIFY_API_KEY
+
+[env.production]
+name = "cook-agent"
+
+# Limites de ressources
+[limits]
+cpu_ms = 50
+
+# Configuration pour les routes
+# Les routes seront gérées par React Router

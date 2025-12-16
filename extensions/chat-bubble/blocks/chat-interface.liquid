@@ -27,6 +27,8 @@
     --shop-ai-user-message-color: {{ block.settings.user_message_color }};
     --shop-ai-add-to-cart-color: {{ block.settings.add_to_cart_button_color }};
     --shop-ai-link-and-price-color: {{ block.settings.link_and_price_color }};
+    --shop-ai-chat-max-width: {{ block.settings.chat_max_width }}px;
+    --shop-ai-chat-height-mult: {{ block.settings.chat_height_percent | divided_by: 100.0 }};
   "
 >
   <div class="shop-ai-chat-bubble">
@@ -122,6 +124,26 @@
       "id": "link_and_price_color",
       "label": "t:chat.schema.settings.linkAndPriceColor",
       "default": "#5046e4"
+    },
+    {
+      "type": "range",
+      "id": "chat_max_width",
+      "label": "t:chat.schema.settings.chatMaxWidth",
+      "min": 320,
+      "max": 650,
+      "step": 10,
+      "unit": "px",
+      "default": 450
+    },
+    {
+      "type": "range",
+      "id": "chat_height_percent",
+      "label": "t:chat.schema.settings.chatHeightPercent",
+      "min": 40,
+      "max": 90,
+      "step": 5,
+      "unit": "%",
+      "default": 70
     },
     {
       "type": "text",

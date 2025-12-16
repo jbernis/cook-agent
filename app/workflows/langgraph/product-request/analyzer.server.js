@@ -459,24 +459,67 @@ export function classifyCustomerMessageIntent(text) {
 
   if (looksLikeExplicitRecipePrompt(raw)) return { kind: "recipe", head: "recette" };
 
+  // Détecter les plats composés courants avant d'extraire le head noun
+  const lower = stripDiacritics(raw.toLowerCase());
+  const COMPOSITE_DISHES = [
+    "pot au feu",
+    "pot-au-feu",
+    "boeuf bourguignon",
+    "bœuf bourguignon",
+    "coq au vin",
+    "blanquette de veau",
+    "cassoulet",
+    "bouillabaisse",
+    "choucroute",
+    "tarte tatin",
+    "creme brulee",
+    "crème brûlée",
+    "crème brulee",
+    "creme brulée",
+    "quiche lorraine",
+    "quiche aux poireaux",
+    "quiche aux lardons",
+    "quiche aux champignons",
+  ];
+  
+  // Détecter si des produits sont mentionnés (pour les cas hybrides)
+  const hasProductMention = hasObviousProductNoun(raw) || 
+                            /\bj'?ai\s+(?:deja|déjà|dejà|déja|dejá|un|une|des)\s+/i.test(raw) ||
+                            /\bil\s+me\s+manque/i.test(raw);
+  
+  for (const dish of COMPOSITE_DISHES) {
+    if (lower.includes(dish)) {
+      // Si c'est un plat composite ET qu'il y a des produits mentionnés → cas HYBRIDE
+      if (hasProductMention && !looksLikeCommerceIntent(raw)) {
+        return { kind: "hybrid", head: dish };
+      }
+      // Sinon, c'est une recette simple
+      return { kind: "recipe", head: dish };
+    }
+  }
+
   const head = extractHeadNoun(raw);
   const headNorm = head ? stripDiacritics(head.toLowerCase()) : null;
 
-  if (headNorm && PRODUCT_HEAD_NOUNS.has(headNorm)) return { kind: "product", head: headNorm };
-
-  if (
-    headNorm &&
-    DISH_HEAD_NOUNS.has(headNorm) &&
-    !hasObviousProductNoun(raw) &&
-    !looksLikeCommerceIntent(raw)
-  ) {
-    return { kind: "recipe", head: headNorm };
+  // PRIORITÉ 1: Vérifier d'abord si c'est un plat (même si c'est aussi dans PRODUCT_HEAD_NOUNS)
+  // Cela permet de détecter les cas hybrides correctement
+  if (headNorm && DISH_HEAD_NOUNS.has(headNorm)) {
+    // Si c'est un plat ET qu'il y a des produits mentionnés → cas HYBRIDE
+    if (hasProductMention && !looksLikeCommerceIntent(raw)) {
+      return { kind: "hybrid", head: headNorm };
+    }
+    // Si c'est un plat sans intention commerciale → recette
+    if (!looksLikeCommerceIntent(raw)) {
+      return { kind: "recipe", head: headNorm };
+    }
   }
+
+  // PRIORITÉ 2: Vérifier si c'est un produit (seulement si ce n'est pas un plat)
+  if (headNorm && PRODUCT_HEAD_NOUNS.has(headNorm)) return { kind: "product", head: headNorm };
 
   if (hasObviousProductNoun(raw)) return { kind: "product", head: headNorm };
 
   // Recipe-ish terms
-  const lower = stripDiacritics(raw.toLowerCase());
   if (
     /\b(recette|ingredients?|ingr[eé]dients|preparation|cuisson|preparer|cuisiner|realiser|etapes?|instructions?)\b/i.test(
       lower
@@ -487,6 +530,34 @@ export function classifyCustomerMessageIntent(text) {
 
   // Explicit commerce/search → treat as product (product analyzer will still return [] if irrelevant)
   if (looksLikeCommerceIntent(raw)) return { kind: "product", head: headNorm };
+
+  // Vérification finale: chercher des noms de plats dans tout le texte avant de retourner "other"
+  // Cela permet de détecter les recettes même si le head noun extrait n'est pas un plat
+  // (par exemple si le verbe d'intention contient une faute de frappe)
+  const tokens = lower.split(/\s+/g).filter(Boolean);
+  let hasDishToken = false;
+  let dishToken = null;
+
+  for (const token of tokens) {
+    if (DISH_HEAD_NOUNS.has(token)) {
+      hasDishToken = true;
+      dishToken = token;
+      // Si on trouve un nom de plat dans le texte, vérifier s'il y a aussi un produit
+      // pour détecter les cas hybrides (recette + produit)
+      if (!looksLikeCommerceIntent(raw)) {
+        // Vérifier si c'est un cas HYBRIDE (recette + produit)
+        if (hasProductMention) {
+          return { kind: "hybrid", head: dishToken };
+        }
+        return { kind: "recipe", head: token };
+      }
+    }
+  }
+
+  // Détection des cas hybrides: recette ET produit dans la même phrase
+  if (hasDishToken && hasProductMention) {
+    return { kind: "hybrid", head: dishToken || headNorm };
+  }
 
   return { kind: "other", head: headNorm };
 }
